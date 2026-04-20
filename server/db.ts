@@ -16,6 +16,7 @@ import {
   type SignalSensitivity,
   type SignalType,
   type TradingWorkspace,
+  type TriggerAction,
   type WatchlistRecord,
 } from "./mockData";
 
@@ -38,7 +39,23 @@ type LiveQuoteInput = {
   prevClosePrice: number;
 };
 
+type SignalBlueprint = {
+  signalType: SignalType;
+  score: number;
+  direction: Direction;
+  triggerAction: TriggerAction;
+  triggerPrice: number;
+  stopLossPrice: number | null;
+  invalidationCondition: string;
+  triggerReason: string;
+  riskTags: string[];
+  entryRange: string;
+  stopLoss: string;
+  rationale: string;
+};
+
 type LiveBridgeIngestInput = {
+  bridgeToken?: string;
   opendHost: string;
   opendPort: number;
   trackedSymbols?: string[];
@@ -159,7 +176,7 @@ function resolveBridgeStatus(settings: SettingsRecord["liveBridge"]) {
 }
 
 function directionForSignalType(signalType: SignalType): Direction {
-  return signalType === "冲高衰竭" ? "观察" : "做多";
+  return signalType === "冲高衰竭" ? "做空" : "做多";
 }
 
 function deriveSignalAlertLevel(score: number, preferred: AlertLevel): AlertLevel {
@@ -167,20 +184,25 @@ function deriveSignalAlertLevel(score: number, preferred: AlertLevel): AlertLeve
   if (score >= 75) return preferred === "INFO" ? "WARNING" : preferred;
   return preferred;
 }
-
 export function createStructuredSuggestion(input: {
   signalType: SignalType;
   direction: Direction;
-  entryRange: string;
-  stopLoss: string;
+  triggerAction: "买入提醒" | "卖出提醒" | "观察提醒";
+  triggerPrice: number;
+  stopLossPrice: number | null;
+  invalidationCondition: string;
   rationale: string;
 }) {
+  const stopLossDisplay = input.stopLossPrice ?? "未设置";
   return {
     方向: input.direction,
-    参考入场区间: input.entryRange,
-    止损参考: input.stopLoss,
+    参考入场区间: `${input.triggerAction} @ ${input.triggerPrice}`,
+    止损参考: typeof stopLossDisplay === "number" ? `止损价 ${stopLossDisplay}` : stopLossDisplay,
     理由说明: input.rationale,
-    signalType: input.signalType,
+    触发动作: input.triggerAction,
+    触发价位: input.triggerPrice,
+    止损价位: input.stopLossPrice,
+    失效条件: input.invalidationCondition,
   };
 }
 
@@ -190,7 +212,7 @@ function sensitivityAdjustment(sensitivity: SignalSensitivity) {
   return 0;
 }
 
-function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
+function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): SignalBlueprint | null {
   const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
   const pullbackFromHighPct = quote.highPrice > 0 ? ((quote.highPrice - quote.lastPrice) / quote.highPrice) * 100 : 0;
   const fromOpenPct = quote.openPrice > 0 ? ((quote.lastPrice - quote.openPrice) / quote.openPrice) * 100 : 0;
@@ -204,11 +226,16 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
     return {
       signalType: "突破啟動" as const,
       score,
+      direction: "做多" as const,
+      triggerAction: "买入提醒" as const,
+      triggerPrice: round(quote.highPrice),
+      stopLossPrice: round(Math.max(quote.openPrice, quote.lastPrice * 0.985)),
+      invalidationCondition: `若回落并跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))}，则本次突破买入逻辑失效。`,
       triggerReason: `${baseReason}价格贴近当日高点且量价共振，符合突破啟動结构。`,
       riskTags: ["追价滑点", "高位波动"],
-      entryRange: `${round(quote.lastPrice * 0.997)} - ${round(quote.highPrice)}`,
+      entryRange: `买入触发价 ${round(quote.highPrice)}`,
       stopLoss: `跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))} 需降低仓位`,
-      rationale: "当前属于顺势启动型结构，更适合等待微幅回撤后的跟进，而不是无保护追高。",
+      rationale: "当前属于顺势启动型结构，更适合等待明确突破点触发后的跟进，而不是无保护追高。",
     };
   }
 
@@ -217,11 +244,16 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
     return {
       signalType: "回踩續強" as const,
       score,
+      direction: "做多" as const,
+      triggerAction: "买入提醒" as const,
+      triggerPrice: round(quote.lastPrice),
+      stopLossPrice: round(quote.openPrice * 0.995),
+      invalidationCondition: `若失守 ${round(quote.openPrice * 0.995)}，说明回踩承接失败，本次买入提醒失效。`,
       triggerReason: `${baseReason}冲高后并未深度破坏结构，回踩仍保持在强势区，符合回踩續強特征。`,
       riskTags: ["二次确认失败", "午后回落"],
-      entryRange: `${round(Math.max(quote.openPrice, quote.lastPrice * 0.993))} - ${round(quote.lastPrice)}`,
+      entryRange: `买入触发价 ${round(quote.lastPrice)}`,
       stopLoss: `失守 ${round(quote.openPrice * 0.995)} 需谨慎`,
-      rationale: "适合把回踩后的承接强度作为入场依据，若成交继续扩张，延续概率会提高。",
+      rationale: "适合把回踩后的承接强度作为入场依据，一旦价格重新站稳当前触发点，可视作跟进信号。",
     };
   }
 
@@ -230,11 +262,18 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
     return {
       signalType: "盤口失衡" as const,
       score,
+      direction: changePct >= 0 ? "做多" as const : "做空" as const,
+      triggerAction: changePct >= 0 ? "买入提醒" as const : "卖出提醒" as const,
+      triggerPrice: round(quote.lastPrice),
+      stopLossPrice: changePct >= 0 ? round(quote.lowPrice) : round(quote.highPrice),
+      invalidationCondition: changePct >= 0
+        ? `若跌回 ${round(quote.lowPrice)} 下方，则买方失衡信号失效。`
+        : `若重新站上 ${round(quote.highPrice)}，则卖方失衡信号失效。`,
       triggerReason: `${baseReason}价格波动有限但成交明显抬升，说明短线买卖力量正在重新分配。`,
       riskTags: ["需要盘口确认", "假突破风险"],
-      entryRange: `${round(quote.lowPrice * 1.002)} - ${round(quote.lastPrice)}`,
-      stopLoss: `若跌回 ${round(quote.lowPrice)} 下方则取消观察`,
-      rationale: "该信号更适合作为预警，不宜单独执行，最好与更深的逐笔或盘口信息一起确认。",
+      entryRange: `${changePct >= 0 ? "买入" : "卖出"}触发价 ${round(quote.lastPrice)}`,
+      stopLoss: changePct >= 0 ? `若跌回 ${round(quote.lowPrice)} 下方则取消观察` : `若重新站上 ${round(quote.highPrice)} 上方则取消观察`,
+      rationale: "该信号强调力量失衡形成的实时节点，适合作为盘中买卖提醒，而不是宽泛区间预测。",
     };
   }
 
@@ -243,11 +282,16 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
     return {
       signalType: "冲高衰竭" as const,
       score,
+      direction: "做空" as const,
+      triggerAction: "卖出提醒" as const,
+      triggerPrice: round(quote.lastPrice),
+      stopLossPrice: round(quote.highPrice * 0.997),
+      invalidationCondition: `若重新站回 ${round(quote.highPrice * 0.997)} 上方，则本次卖出提醒失效。`,
       triggerReason: `${baseReason}价格从高位回落幅度扩大，冲高后的跟随资金不足，出现冲高衰竭迹象。`,
       riskTags: ["高位回落", "承接减弱"],
-      entryRange: `${round(quote.lastPrice * 0.995)} - ${round(quote.lastPrice * 1.002)}`,
+      entryRange: `卖出触发价 ${round(quote.lastPrice)}`,
       stopLoss: `重新站回 ${round(quote.highPrice * 0.997)} 上方则撤销衰竭判断`,
-      rationale: "这类结构更偏向节奏警示，应优先控制追高冲动，等待新的支撑确认。",
+      rationale: "这类结构更适合作为卖出或减仓提醒，应优先管理已有盈利与高位回撤风险。",
     };
   }
 
@@ -267,7 +311,11 @@ function buildSignalRecord(userId: number, quote: LiveQuoteInput, settings: Sett
     score: blueprint.score,
     triggerReason: blueprint.triggerReason,
     riskTags: blueprint.riskTags,
-    direction: directionForSignalType(blueprint.signalType),
+    direction: blueprint.direction ?? directionForSignalType(blueprint.signalType),
+    triggerAction: blueprint.triggerAction,
+    triggerPrice: blueprint.triggerPrice,
+    stopLossPrice: blueprint.stopLossPrice,
+    invalidationCondition: blueprint.invalidationCondition,
     entryRange: blueprint.entryRange,
     stopLoss: blueprint.stopLoss,
     rationale: blueprint.rationale,
@@ -298,6 +346,10 @@ function upsertSignalFromQuote(userId: number, quote: LiveQuoteInput, settings: 
     recent.triggerReason = candidate.triggerReason;
     recent.riskTags = candidate.riskTags;
     recent.direction = candidate.direction;
+    recent.triggerAction = candidate.triggerAction;
+    recent.triggerPrice = candidate.triggerPrice;
+    recent.stopLossPrice = candidate.stopLossPrice;
+    recent.invalidationCondition = candidate.invalidationCondition;
     recent.entryRange = candidate.entryRange;
     recent.stopLoss = candidate.stopLoss;
     recent.rationale = candidate.rationale;
@@ -319,7 +371,7 @@ function ensureAlertForSignal(userId: number, signal: SignalRecord, settings: Se
   const workspace = getWorkspace(userId);
   const level = deriveSignalAlertLevel(signal.score, settings.alertLevelPreference);
   const title = `${signal.symbol} ${signal.signalType} · ${signal.score} 分`;
-  const message = `${signal.triggerReason} 建议方向：${signal.direction}，参考入场区间：${signal.entryRange}。`;
+  const message = `${signal.triggerReason} ${signal.triggerAction}价位：${signal.triggerPrice}，止损参考：${signal.stopLossPrice ?? signal.stopLoss}。`;
 
   const duplicate = workspace.alerts.find(
     alert =>
@@ -669,6 +721,9 @@ export function summarizeDashboard(userId: number) {
       activeSignalType: activeSignal?.signalType ?? null,
       activeSignalScore: activeSignal?.score ?? null,
       suggestionDirection: activeSignal?.direction ?? null,
+      suggestionAction: activeSignal?.triggerAction ?? null,
+      suggestionTriggerPrice: activeSignal?.triggerPrice ?? null,
+      suggestionStopLossPrice: activeSignal?.stopLossPrice ?? null,
       suggestionEntryRange: activeSignal?.entryRange ?? null,
       sourceMode: item.sourceMode,
     };

@@ -101,8 +101,10 @@ describe("trading signal monitoring system", () => {
 
     expect(first?.suggestion).toMatchObject({
       方向: expect.any(String),
-      参考入场区间: expect.any(String),
-      止损参考: expect.any(String),
+      触发动作: expect.any(String),
+      触发价位: expect.any(Number),
+      止损价位: expect.any(Number),
+      失效条件: expect.any(String),
       理由说明: expect.any(String),
     });
   });

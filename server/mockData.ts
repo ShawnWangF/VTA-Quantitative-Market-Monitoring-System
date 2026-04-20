@@ -5,6 +5,7 @@ export type Direction = "做多" | "做空" | "观察";
 export type SignalSensitivity = "保守" | "标准" | "激进";
 export type BridgeConnectionStatus = "未连接" | "已连接" | "陈旧" | "异常";
 export type QuoteSourceMode = "demo" | "live";
+export type TriggerAction = "买入提醒" | "卖出提醒" | "观察提醒";
 
 export type WatchlistRecord = {
   id: number;
@@ -37,6 +38,10 @@ export type SignalRecord = {
   triggerReason: string;
   riskTags: string[];
   direction: Direction;
+  triggerAction: TriggerAction;
+  triggerPrice: number;
+  stopLossPrice: number | null;
+  invalidationCondition: string;
   entryRange: string;
   stopLoss: string;
   rationale: string;
@@ -204,7 +209,11 @@ function seededSignals(userId: number): SignalRecord[] {
       triggerReason: "泡泡玛特早盘跳空后持续放量，价格贴近当日高点，趋势启动结构清晰。",
       riskTags: ["高位波动", "追价滑点"],
       direction: "做多",
-      entryRange: "36.60 - 37.05",
+      triggerAction: "买入提醒",
+      triggerPrice: 37.05,
+      stopLossPrice: 35.95,
+      invalidationCondition: "若回落并跌破 35.95，则本次突破跟进逻辑失效。",
+      entryRange: "买入触发价 37.05",
       stopLoss: "跌破 35.95 需降低仓位",
       rationale: "价格与成交额同步提升，属于高景气题材下的动量延续结构。",
       llmInterpretation: null,
@@ -224,7 +233,11 @@ function seededSignals(userId: number): SignalRecord[] {
       triggerReason: "美团早盘上冲后回踩开盘中轴企稳，重新站回短线强势区。",
       riskTags: ["午后回落", "二次确认失败"],
       direction: "做多",
-      entryRange: "117.10 - 117.85",
+      triggerAction: "买入提醒",
+      triggerPrice: 117.85,
+      stopLossPrice: 116.35,
+      invalidationCondition: "若跌回 116.35 下方，说明回踩承接失败，本次买入提醒失效。",
+      entryRange: "买入触发价 117.85",
       stopLoss: "失守 116.35 需谨慎",
       rationale: "回踩后的承接仍在，若再度放量，具备继续向上试高的条件。",
       llmInterpretation: null,

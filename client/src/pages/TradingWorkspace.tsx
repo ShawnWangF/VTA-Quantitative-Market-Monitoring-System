@@ -299,11 +299,11 @@ export function DashboardPage() {
         <Card className="border-white/80 bg-white/90">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><Radar className="h-5 w-5 text-cyan-700" />实时行情联动板</CardTitle>
-            <CardDescription>同一行中直接看见行情、信号分数和结构化建议方向。</CardDescription>
+            <CardDescription>同一行中直接看见行情、信号分数，以及明确的买入或卖出触发价提醒。</CardDescription>
           </CardHeader>
           <CardContent>
             <SmallTable
-              headers={["市场", "标的", "最新价", "涨跌幅", "成交量", "实时信号", "建议方向"]}
+              headers={["市场", "标的", "最新价", "涨跌幅", "成交量", "实时信号", "盘中提醒"]}
               rows={data.liveBoard.map((item: any) => [
                 <Badge key={`${item.symbol}-market`} variant="outline" className="font-mono text-[11px]">{item.market}</Badge>,
                 <div key={item.symbol}>
@@ -323,8 +323,8 @@ export function DashboardPage() {
                 ),
                 item.suggestionDirection ? (
                   <div key={`${item.symbol}-direction`} className="space-y-1">
-                    <div className="font-semibold text-slate-900">{item.suggestionDirection}</div>
-                    <div className="text-xs text-slate-500">{item.suggestionEntryRange}</div>
+                    <div className="font-semibold text-slate-900">{item.suggestionAction ?? item.suggestionDirection}</div>
+                    <div className="text-xs text-slate-500">触发价 {item.suggestionTriggerPrice ?? "--"} · 止损价 {item.suggestionStopLossPrice ?? "--"}</div>
                   </div>
                 ) : (
                   <span key={`${item.symbol}-direction`} className="text-xs text-slate-400">等待行情驱动</span>
@@ -500,7 +500,8 @@ export function SignalsPage() {
   }, [autoRequestedIds, interpretMutation, signalItems]);
 
   return (
-    <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="围绕“突破啟動、回踩續強、盤口失衡、冲高衰竭”四类信号实时展示价格、评分、理由、建议与自然语言解读。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+      <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="围绕“突破啟動、回踩續強、盤口失衡、冲高衰竭”四类信号实时展示价格、评分、理由，以及盘中明确买入或卖出触发点。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+
       <div className="grid gap-4 md:grid-cols-2">
         {signalItems.map((signal: any) => (
           <Card key={signal.id} className="border-white/80 bg-white/92 shadow-[0_16px_60px_-36px_rgba(14,116,144,0.5)]">
@@ -534,24 +535,33 @@ export function SignalsPage() {
             <CardContent className="space-y-5">
               <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
                 <div className="flex items-center gap-2 text-base font-semibold text-slate-900"><TrendingUp className="h-4 w-4 text-cyan-700" />交易建议卡片</div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-xl border border-white bg-white p-3">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">方向</div>
-                    <div className="mt-2 text-lg font-bold">{signal.suggestion.方向}</div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="rounded-xl border border-white bg-white p-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">方向</div>
+                      <div className="mt-2 text-lg font-bold">{signal.suggestion.方向}</div>
+                    </div>
+                    <div className="rounded-xl border border-cyan-100 bg-cyan-50/80 p-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-cyan-700">触发动作</div>
+                      <div className="mt-2 text-lg font-bold text-cyan-950">{signal.suggestion.触发动作}</div>
+                    </div>
+                    <div className="rounded-xl border border-pink-100 bg-pink-50/80 p-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-pink-700">触发价位</div>
+                      <div className="mt-2 text-lg font-bold text-pink-950">{signal.suggestion.触发价位}</div>
+                    </div>
+                    <div className="rounded-xl border border-white bg-white p-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">止损价位</div>
+                      <div className="mt-2 text-lg font-bold">{signal.suggestion.止损价位}</div>
+                    </div>
+                    <div className="rounded-xl border border-white bg-white p-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">失效条件</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-700">{signal.suggestion.失效条件}</div>
+                    </div>
+                    <div className="rounded-xl border border-white bg-white p-3 md:col-span-2 xl:col-span-1">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">理由说明</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-700">{signal.suggestion.理由说明}</div>
+                    </div>
                   </div>
-                  <div className="rounded-xl border border-white bg-white p-3">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">参考入场区间</div>
-                    <div className="mt-2 text-lg font-bold">{signal.suggestion.参考入场区间}</div>
-                  </div>
-                  <div className="rounded-xl border border-white bg-white p-3">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">止损参考</div>
-                    <div className="mt-2 text-lg font-bold">{signal.suggestion.止损参考}</div>
-                  </div>
-                  <div className="rounded-xl border border-white bg-white p-3">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">理由说明</div>
-                    <div className="mt-2 text-sm leading-6 text-slate-700">{signal.suggestion.理由说明}</div>
-                  </div>
-                </div>
+
               </div>
 
               <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
@@ -928,7 +938,32 @@ export function SettingsPage() {
                   <span>最近心跳：{formatDateTime(settings.data?.liveBridge.lastBridgeHeartbeatAt)}</span>
                 </div>
                 <div>最近行情更新时间：{formatDateTime(settings.data?.liveBridge.lastQuoteAt)}</div>
-                {settings.data?.liveBridge.lastError ? <div className="text-pink-700">最近错误：{settings.data.liveBridge.lastError}</div> : null}
+                {settings.data?.liveBridge.lastError ? <div className="text-pink-700">最近错误：{settings.data.liveBridge.lastError}</div> : <div className="text-slate-500">如果一直显示“未连接”，通常说明 Windows 侧桥接程序还没有真正启动，或桥接令牌 / 云端接收地址没有填写正确。</div>}
+              </div>
+              <div className="md:col-span-2 rounded-3xl border border-cyan-200 bg-cyan-50/70 p-5">
+                <div className="flex items-center gap-2 text-base font-semibold text-cyan-950"><Clock3 className="h-4 w-4" />我该怎么连接</div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 1</div>
+                    <div className="mt-2 font-semibold text-slate-900">在你的 Windows 电脑保持 Futu OpenD 已登录</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">确认 OpenD 监听地址为 {form.opendHost}，端口为 {form.opendPort}，并保持富途窗口不要退出。</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 2</div>
+                    <div className="mt-2 font-semibold text-slate-900">在本页复制“云端接收地址”和“桥接令牌”</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">这两个值要填写到 Windows 桥接脚本配置里，少一个都无法回传行情。</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 3</div>
+                    <div className="mt-2 font-semibold text-slate-900">在 Windows 里运行桥接脚本</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">先安装 `pip install futu-api requests`，再运行 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`。</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 4</div>
+                    <div className="mt-2 font-semibold text-slate-900">回到本页点击“测试桥接联通”</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">如果最近心跳和最近行情都刷新，就代表本地 OpenD 已经真正桥连成功。</p>
+                  </div>
+                </div>
               </div>
               <div className="md:col-span-2 space-y-3">
                 <div className="flex flex-wrap gap-3">

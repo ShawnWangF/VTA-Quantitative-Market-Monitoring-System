@@ -42,8 +42,10 @@ async function ensureHighScoreNotifications(userId: number) {
         `市场：${signal.market}`,
         `评分：${signal.score}`,
         `方向：${signal.direction}`,
-        `参考入场区间：${signal.entryRange}`,
-        `止损参考：${signal.stopLoss}`,
+        `触发动作：${signal.triggerAction}`,
+        `触发价位：${signal.triggerPrice}`,
+        `止损价位：${signal.stopLossPrice ?? signal.stopLoss}`,
+        `失效条件：${signal.invalidationCondition}`,
         `理由说明：${signal.rationale}`,
         `行情快照：价格 ${signal.quotePrice} / 涨跌幅 ${signal.quoteChangePct}% / 成交量 ${signal.quoteVolume}`,
       ].join("\n"),
@@ -60,7 +62,7 @@ function fallbackInterpretation(signal: ReturnType<typeof listSignals>[number]) 
     `该信号属于“${signal.signalType}”，当前评分为 ${signal.score} 分，方向倾向为 ${signal.direction}。`,
     `从结构上看，触发原因主要是：${signal.triggerReason}`,
     `实时行情快照显示价格 ${signal.quotePrice}、涨跌幅 ${signal.quoteChangePct}% 、成交量 ${signal.quoteVolume}。`,
-    `交易计划上可优先关注 ${signal.entryRange} 区间，并以 ${signal.stopLoss} 作为风险参考。`,
+    `交易计划上可优先关注 ${signal.triggerAction} 价位 ${signal.triggerPrice}，并以 ${signal.stopLossPrice ?? signal.stopLoss} 作为风险参考。`,
     `需要特别注意的风险包括：${signal.riskTags.join("、") || "暂无"}。`,
   ].join("");
 }
@@ -124,8 +126,10 @@ export const appRouter = router({
         suggestion: createStructuredSuggestion({
           signalType: signal.signalType,
           direction: signal.direction,
-          entryRange: signal.entryRange,
-          stopLoss: signal.stopLoss,
+          triggerAction: signal.triggerAction,
+          triggerPrice: signal.triggerPrice,
+          stopLossPrice: signal.stopLossPrice,
+          invalidationCondition: signal.invalidationCondition,
           rationale: signal.rationale,
         }),
       }));
@@ -148,7 +152,7 @@ export const appRouter = router({
               },
               {
                 role: "user",
-                content: `请解读以下信号：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n方向：${signal.direction}\n参考入场区间：${signal.entryRange}\n止损参考：${signal.stopLoss}\n理由说明：${signal.rationale}\n实时价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}`,
+                content: `请解读以下信号：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n方向：${signal.direction}\n触发动作：${signal.triggerAction}\n触发价位：${signal.triggerPrice}\n止损价位：${signal.stopLossPrice ?? signal.stopLoss}\n失效条件：${signal.invalidationCondition}\n理由说明：${signal.rationale}\n实时价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}`,
               },
             ],
           });
