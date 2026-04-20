@@ -42,9 +42,9 @@ class BridgeConfig:
         bridge_token = str(data.get("bridge_token", "")).strip()
         if len(bridge_token) < 8:
             raise ValueError("bridge_token 长度至少为 8")
-        ingest_url = str(data.get("ingest_url", "")).strip()
+        ingest_url = str(data.get("cloud_ingest_url") or data.get("ingest_url") or "").strip()
         if not ingest_url.startswith("http"):
-            raise ValueError("ingest_url 必须是有效的 http/https 地址")
+            raise ValueError("cloud_ingest_url / ingest_url 必须是有效的 http/https 地址")
         return cls(
             ingest_url=ingest_url,
             bridge_token=bridge_token,

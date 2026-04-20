@@ -17,7 +17,7 @@
    - **桥接令牌**
 3. 把 `bridge_config.example.json` 复制一份并改名为 `bridge_config.json`。
 4. 在 `bridge_config.json` 中填入：
-   - `ingest_url`
+   - `cloud_ingest_url`（或兼容旧键名 `ingest_url`）
    - `bridge_token`
    - `tracked_symbols`
 
@@ -25,7 +25,7 @@
 
 ```json
 {
-  "ingest_url": "https://你的系统域名/api/futu-bridge/ingest",
+  "cloud_ingest_url": "https://你的系统域名/api/futu-bridge/ingest",
   "bridge_token": "系统设置页中的桥接令牌",
   "opend_host": "127.0.0.1",
   "opend_port": 11111,
@@ -50,6 +50,14 @@ pip install futu-api requests
 ```powershell
 python .\windows_futu_bridge.py --config .\bridge_config.json
 ```
+
+如果 `bridge_config.json` 不在当前目录，请改成完整路径，例如：
+
+```powershell
+python .\windows_futu_bridge.py --config C:\futu\bridge_config.json
+```
+
+请不要把 `bridge_config.json` 直接写成位置参数；PowerShell 下也必须显式保留 `--config`。
 
 如果连接成功，桥接程序会循环执行以下动作：
 
@@ -76,14 +84,39 @@ python .\windows_futu_bridge.py --config .\bridge_config.json
 - 端口是 `11111`
 - 当前账户具备港股实时行情权限
 
-### 2. 页面仍显示“未连接”
+### 2. 启动时报“参数缺失”
+这通常表示你漏掉了 `--config`，正确写法必须是：
+
+```powershell
+python .\windows_futu_bridge.py --config .\bridge_config.json
+```
+
+### 3. 启动时报“配置文件不存在”
+请确认：
+- PowerShell 当前目录就是脚本所在目录，或者
+- `--config` 后面使用的是配置文件的绝对路径
+
+### 4. 页面仍显示“未连接”
 请依次检查：
-- `ingest_url` 是否正确
+- `cloud_ingest_url`（或旧键名 `ingest_url`）是否正确
 - `bridge_token` 是否与系统设置页一致
 - Windows 防火墙是否拦截了 Python 请求
 - 本地网络是否可访问当前网页域名
 
-### 3. 页面显示“异常”
+### 5. 日志提示“云端地址未填写”
+这通常说明 `cloud_ingest_url` / `ingest_url` 没有写入，或只复制了域名而没有完整接口地址。
+
+### 6. 日志提示“OpenD 未连接”
+说明 Windows 本机的 Futu OpenD 尚未登录，或配置里的 `opend_host` / `opend_port` 与实际监听值不一致。
+
+### 7. 报错 `tracked_symbols 不能为空`
+请确认 `tracked_symbols` 是至少包含一个代码的数组，首轮建议直接使用：
+
+```json
+["03690", "09992"]
+```
+
+### 8. 页面显示“异常”
 说明桥接程序已上报错误，系统设置页会显示最近错误信息。优先检查：
 - OpenD 是否掉线
 - 追踪代码格式是否正确

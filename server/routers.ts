@@ -201,18 +201,28 @@ export const appRouter = router({
   signals: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       await ensureHighScoreNotifications(ctx.user.id);
-      return listScopedSignals(ctx.user.id).map(signal => ({
-        ...signal,
-        suggestion: createStructuredSuggestion({
-          signalType: signal.signalType,
-          direction: signal.direction,
-          triggerAction: signal.triggerAction,
-          triggerPrice: signal.triggerPrice,
-          stopLossPrice: signal.stopLossPrice,
-          invalidationCondition: signal.invalidationCondition,
-          rationale: signal.rationale,
-        }),
-      }));
+      const watchlistMap = new Map(
+        listWatchlist(ctx.user.id).map(item => [`${item.market}:${item.symbol}`, item])
+      );
+      return listScopedSignals(ctx.user.id).map(signal => {
+        const matchedSecurity = watchlistMap.get(`${signal.market}:${signal.symbol}`) ?? null;
+        const matchedName = matchedSecurity?.name ?? signal.symbol;
+        return {
+          ...signal,
+          name: matchedName,
+          securityLabel: `${signal.symbol} · ${matchedName}`,
+          identityKey: `${signal.market}:${signal.symbol}`,
+          suggestion: createStructuredSuggestion({
+            signalType: signal.signalType,
+            direction: signal.direction,
+            triggerAction: signal.triggerAction,
+            triggerPrice: signal.triggerPrice,
+            stopLossPrice: signal.stopLossPrice,
+            invalidationCondition: signal.invalidationCondition,
+            rationale: signal.rationale,
+          }),
+        };
+      });
     }),
     interpretWithLlm: protectedProcedure
       .input(z.object({ signalId: z.number().int().positive() }))

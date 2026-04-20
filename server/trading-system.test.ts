@@ -107,6 +107,16 @@ describe("trading signal monitoring system", () => {
       失效条件: expect.any(String),
       理由说明: expect.any(String),
     });
+    expect(signals.find(signal => signal.symbol === "03690")).toMatchObject({
+      name: "美团-W",
+      securityLabel: "03690 · 美团-W",
+      identityKey: "HK:03690",
+    });
+    expect(signals.find(signal => signal.symbol === "09992")).toMatchObject({
+      name: "泡泡玛特",
+      securityLabel: "09992 · 泡泡玛特",
+      identityKey: "HK:09992",
+    });
   });
 
   it("stores llm interpretation back to the signal after interpretation is requested", async () => {
@@ -321,6 +331,12 @@ describe("trading signal monitoring system", () => {
 
     const overview = summarizeDashboard(1);
     expect(overview.liveBoard.length).toBeGreaterThan(0);
+    expect(overview.latestSignals[0]).toMatchObject({
+      symbol: expect.any(String),
+      name: expect.any(String),
+      securityLabel: expect.stringMatching(/^[0-9A-Z.\-]+\s·\s.+$/),
+      identityKey: expect.stringMatching(/^(HK|US):/),
+    });
     expect(overview.liveBoard[0]?.chart.length).toBeGreaterThan(10);
     expect(overview.liveBoard[0]?.forecastSummary).toMatchObject({
       trendBias: expect.any(String),
@@ -328,6 +344,10 @@ describe("trading signal monitoring system", () => {
       confidence: expect.any(Number),
     });
     expect(overview.liveBoard[0]).toMatchObject({
+      symbol: expect.any(String),
+      name: expect.any(String),
+      securityLabel: expect.stringMatching(/^[0-9A-Z.\-]+\s·\s.+$/),
+      identityKey: expect.stringMatching(/^(HK|US):/),
       executionPrerequisite: expect.any(String),
       riskLevel: expect.any(String),
       llmForecastSummary: expect.any(String),
@@ -335,6 +355,21 @@ describe("trading signal monitoring system", () => {
         label: expect.any(String),
         price: expect.any(Number),
       },
+    });
+    expect(overview.latestSignals.find(signal => signal.symbol === "03690")).toMatchObject({
+      name: "美团-W",
+      securityLabel: "03690 · 美团-W",
+      identityKey: "HK:03690",
+    });
+    expect(overview.latestSignals.find(signal => signal.symbol === "09992")).toMatchObject({
+      name: "泡泡玛特",
+      securityLabel: "09992 · 泡泡玛特",
+      identityKey: "HK:09992",
+    });
+    expect(overview.liveBoard.find(item => item.symbol === "03690")).toMatchObject({
+      name: "美团-W",
+      securityLabel: "03690 · 美团-W",
+      identityKey: "HK:03690",
     });
     expect(overview.strategyLearning).toMatchObject({
       successRate: expect.any(Number),

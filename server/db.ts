@@ -927,10 +927,23 @@ export function summarizeDashboard(userId: number) {
   const watchlist = scopedWatchlist(userId);
   const signals = listSignals(userId);
   const displaySignals = listDisplaySignals(userId);
-  const alerts = listAlerts(userId).filter(alert => new Set(watchlist.map(item => symbolKey(item.market, item.symbol))).has(symbolKey(alert.market, alert.symbol)));
+  const watchlistKeySet = new Set(watchlist.map(item => symbolKey(item.market, item.symbol)));
+  const watchlistMap = new Map(watchlist.map(item => [symbolKey(item.market, item.symbol), item]));
+  const alerts = listAlerts(userId).filter(alert => watchlistKeySet.has(symbolKey(alert.market, alert.symbol)));
   const review = getLatestReview(userId);
   const settings = getSettings(userId);
-  const latestSignals = displaySignals.slice(0, 4);
+  const latestSignals = displaySignals.slice(0, 4).map(signal => {
+    const matchedSecurity = watchlistMap.get(symbolKey(signal.market, signal.symbol))
+      ?? workspace.watchlistItems.find(item => symbolKey(item.market, item.symbol) === symbolKey(signal.market, signal.symbol))
+      ?? null;
+    const matchedName = matchedSecurity?.name ?? signal.symbol;
+    return {
+      ...signal,
+      name: matchedName,
+      securityLabel: `${signal.symbol} · ${matchedName}`,
+      identityKey: symbolKey(signal.market, signal.symbol),
+    };
+  });
   const alertStats = {
     total: alerts.length,
     critical: alerts.filter(alert => alert.level === "CRITICAL").length,
@@ -948,6 +961,8 @@ export function summarizeDashboard(userId: number) {
     const trendBias = forecastEnd >= item.lastPrice ? "偏多" : "偏空";
     return {
       ...item,
+      securityLabel: `${item.symbol} · ${item.name}`,
+      identityKey: symbolKey(item.market, item.symbol),
       activeSignalType: activeSignal?.signalType ?? null,
       activeSignalScore: activeSignal?.score ?? null,
       suggestionDirection: activeSignal?.direction ?? null,

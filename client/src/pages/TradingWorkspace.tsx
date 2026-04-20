@@ -227,18 +227,57 @@ export function DashboardPage() {
   const liveAlerts = (data.latestSignals ?? []).filter((signal: any) => signal.triggerAction === "买入提醒" || signal.triggerAction === "卖出提醒");
 
   return (
-    <BlueprintPageShell
-      eyebrow="Dashboard"
-      title="预测与指令仪表板"
-      description="主面板现在围绕已选观察标的集中显示预测走势线、策略学习反馈、明确买卖点、止损位、失效条件与实时提醒，让你在同一个界面完成看盘、判断与执行准备。"
-      workspaceLabel={data.liveBridge.sourceLabel}
-    >
+      <BlueprintPageShell
+        eyebrow="Dashboard"
+        title="市场终端与指令仪表板"
+        description="主面板改为更接近真实股票软件的市场终端视图：优先展示代码、名称、分时走势、开高低收与成交信息，只在关键位置叠加买卖、止损与失效提醒，避免让指令遮住行情本身。"
+        workspaceLabel={data.liveBridge.sourceLabel}
+      >
+
       <div className="grid gap-4 lg:grid-cols-4">
         <MetricCard label="当前观察名單" value={String(data.watchlist.length)} detail="仅展示已选跟踪标的" accent="border-cyan-200 bg-cyan-50 text-cyan-800" />
         <MetricCard label="高评分机会" value={String(data.highScoreCount)} detail={`达到 ${data.liveBridge.useLiveQuotes ? "实时" : "演示"} 通知阈值`} accent="border-pink-200 bg-pink-50 text-pink-800" />
         <MetricCard label="策略学习命中率" value={`${data.strategyLearning.successRate}%`} detail={`${data.strategyLearning.evaluatedCount} 条已评估建议`} accent="border-slate-200 bg-slate-50 text-slate-700" />
         <MetricCard label="当日命中率" value={`${data.hitRate}%`} detail="盘后复盘统计" accent="border-cyan-200 bg-cyan-50 text-cyan-800" />
       </div>
+
+      <Card className="border-white/80 bg-white/92 shadow-[0_24px_90px_-48px_rgba(15,23,42,0.35)]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><CandlestickChart className="h-5 w-5 text-cyan-700" />市场主屏</CardTitle>
+          <CardDescription>以更接近交易终端的方式展示已选标的行情，只在右侧叠加当前动作指令与风控条件。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {data.liveBoard.map((item: any) => (
+            <div key={`${item.identityKey}-terminal`} className="grid gap-3 rounded-[1.4rem] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))] p-4 xl:grid-cols-[1.25fr_1.4fr_0.95fr]">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="font-mono text-[11px]">{item.market}</Badge>
+                  <Badge variant="outline" className={item.sourceMode === "live" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "font-mono"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>
+                  {item.activeSignalType ? <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-700">{item.activeSignalType}</Badge> : null}
+                </div>
+                <div>
+                  <div className="text-2xl font-black tracking-[-0.04em] text-slate-900">{item.securityLabel}</div>
+                  <div className="mt-1 text-sm text-slate-500">最新价 {formatNumber(item.lastPrice)} · 涨跌 {formatSigned(item.changePct)}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">开</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.openPrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">高</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.highPrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">低</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.lowPrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">昨收</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.prevClosePrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">量</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.volume)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">额</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.turnover)}</div></div>
+              </div>
+              <div className={`rounded-[1.3rem] border px-4 py-3 ${item.suggestionAction === "买入提醒" ? "border-cyan-200 bg-cyan-50/85" : item.suggestionAction === "卖出提醒" ? "border-pink-200 bg-pink-50/85" : "border-slate-200 bg-slate-50/85"}`}>
+                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">指令覆盖</div>
+                <div className="mt-2 text-lg font-black text-slate-900">{item.suggestionAction ?? "观察中"}</div>
+                <div className="mt-2 text-sm leading-6 text-slate-600">触发 {item.suggestionTriggerPrice ?? "--"} · 止损 {item.suggestionStopLossPrice ?? "--"}</div>
+                <div className="mt-2 text-sm leading-6 text-slate-600">{item.executionPrerequisite}</div>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.9fr]">
         <Card className="border-white/80 bg-white/90 shadow-[0_22px_80px_-40px_rgba(14,116,144,0.5)]">
@@ -248,40 +287,23 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {liveAlerts.length > 0 ? liveAlerts.map((signal: any) => (
-              <div key={signal.id} className={`rounded-[1.6rem] border px-5 py-4 ${signal.triggerAction === "买入提醒" ? "border-cyan-200 bg-cyan-50/80" : "border-pink-200 bg-pink-50/80"}`}>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-2">
+              <div key={signal.id} className={`rounded-[1.4rem] border px-4 py-4 ${signal.triggerAction === "买入提醒" ? "border-cyan-200 bg-cyan-50/75" : "border-pink-200 bg-pink-50/75"}`}>
+                <div className="grid gap-3 xl:grid-cols-[1.05fr_0.85fr]">
+                  <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline" className="font-mono text-[11px]">{signal.market}</Badge>
                       <Badge variant="outline" className={signal.triggerAction === "买入提醒" ? "border-cyan-200 bg-white font-mono text-cyan-800" : "border-pink-200 bg-white font-mono text-pink-700"}>{signal.triggerAction}</Badge>
                       <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-600">{signal.signalType}</Badge>
                     </div>
-                    <div>
-                      <div className="text-2xl font-black tracking-[-0.04em] text-slate-900">{signal.symbol}</div>
-                      <p className="mt-1 text-sm leading-6 text-slate-600">{signal.llmForecastSummary ?? signal.triggerReason}</p>
-                    </div>
+                    <div className="mt-3 text-2xl font-black tracking-[-0.04em] text-slate-900">{signal.securityLabel}</div>
+                    <div className="mt-1 text-sm text-slate-500">现价 {formatNumber(signal.quotePrice)} · 学习状态 {signal.learningStatus}</div>
+                    <p className="mt-3 text-sm leading-6 text-slate-600">{signal.llmForecastSummary ?? signal.triggerReason}</p>
                   </div>
-                  <div className="rounded-2xl border border-white/80 bg-white/90 px-4 py-3 text-right shadow-sm">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.26em] text-slate-500">Score</div>
-                    <div className="text-3xl font-black tracking-[-0.04em] text-slate-900">{signal.score}</div>
-                  </div>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-4">
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">执行动作</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{signal.triggerAction}</div>
-                  </div>
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">触发价位</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{signal.triggerPrice}</div>
-                  </div>
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">止损价位</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{signal.stopLossPrice ?? "--"}</div>
-                  </div>
-                  <div className="rounded-2xl bg-white/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">学习状态</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{signal.learningStatus}</div>
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-2">
+                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">评分</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.score}</div></div>
+                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">触发</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.triggerPrice}</div></div>
+                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">止损</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.stopLossPrice ?? "--"}</div></div>
+                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">涨跌幅</div><div className="mt-2 text-2xl font-black text-slate-900">{formatSigned(signal.quoteChangePct)}</div></div>
                   </div>
                 </div>
               </div>
@@ -343,7 +365,7 @@ export function DashboardPage() {
                     {item.activeSignalType ? <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-700">{item.activeSignalType}</Badge> : null}
                   </div>
                   <div>
-                    <CardTitle className="text-3xl font-black tracking-[-0.04em] text-slate-900">{item.symbol} · {item.name}</CardTitle>
+                    <CardTitle className="text-3xl font-black tracking-[-0.04em] text-slate-900">{item.securityLabel}</CardTitle>
                     <CardDescription className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">{item.llmStrategyNote}</CardDescription>
                   </div>
                 </div>
@@ -367,6 +389,14 @@ export function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">代码</div><div className="mt-1 text-lg font-black text-slate-900">{item.symbol}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">名称</div><div className="mt-1 text-lg font-black text-slate-900">{item.name}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">开 / 高</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.openPrice)} / {formatNumber(item.highPrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">低 / 昨收</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.lowPrice)} / {formatNumber(item.prevClosePrice)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">成交量</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.volume)}</div></div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">成交额</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.turnover)}</div></div>
+              </div>
               <div className="rounded-[1.75rem] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(241,245,249,0.9))] p-4">
                 <ChartContainer
                   className="h-[320px] w-full"
@@ -603,7 +633,7 @@ export function SignalsPage() {
   }, [autoRequestedIds, interpretMutation, signalItems]);
 
   return (
-      <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="围绕“突破啟動、回踩續強、盤口失衡、冲高衰竭”四类信号实时展示价格、评分、理由，以及盘中明确买入或卖出触发点。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+      <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="实时信号页也统一采用代码 + 名称 + 行情快照的展示方式，确保提醒对象与实际标的严格一致，只在行情之上叠加必要指令。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
 
       <div className="grid gap-4 md:grid-cols-2">
         {signalItems.map((signal: any) => (
@@ -616,13 +646,12 @@ export function SignalsPage() {
                     <Badge variant="outline" className="border-cyan-200 bg-cyan-50 font-mono text-cyan-800">{signal.signalType}</Badge>
                     <Badge variant="outline" className={signal.sourceMode === "live" ? "border-pink-200 bg-pink-50 font-mono text-pink-700" : "font-mono"}>{signal.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>
                   </div>
-                  <CardTitle className="mt-3 text-2xl font-black tracking-[-0.03em]">{signal.symbol}</CardTitle>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span>价格 {signal.quotePrice}</span>
-                    <span>·</span>
-                    <span className={signal.quoteChangePct >= 0 ? "text-cyan-700" : "text-pink-700"}>{formatSigned(signal.quoteChangePct)}</span>
-                    <span>·</span>
-                    <span>成交量 {formatNumber(signal.quoteVolume)}</span>
+                  <CardTitle className="mt-3 text-2xl font-black tracking-[-0.03em]">{signal.securityLabel ?? `${signal.symbol} · ${signal.name ?? signal.symbol}`}</CardTitle>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500 xl:grid-cols-4">
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1">现价 {signal.quotePrice}</span>
+                    <span className={`rounded-full border px-3 py-1 ${signal.quoteChangePct >= 0 ? "border-cyan-200 bg-cyan-50 text-cyan-700" : "border-pink-200 bg-pink-50 text-pink-700"}`}>{formatSigned(signal.quoteChangePct)}</span>
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1">成交量 {formatNumber(signal.quoteVolume)}</span>
+                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1">标识 {signal.identityKey ?? `${signal.market}:${signal.symbol}`}</span>
                   </div>
                 </div>
                 <div className="rounded-2xl border border-pink-200 bg-pink-50 px-4 py-3 text-right">
@@ -638,6 +667,24 @@ export function SignalsPage() {
             <CardContent className="space-y-5">
               <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
                 <div className="flex items-center gap-2 text-base font-semibold text-slate-900"><TrendingUp className="h-4 w-4 text-cyan-700" />交易建议卡片</div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-xl border border-white bg-white p-3">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">代码</div>
+                    <div className="mt-2 text-lg font-bold">{signal.symbol}</div>
+                  </div>
+                  <div className="rounded-xl border border-white bg-white p-3">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">名称</div>
+                    <div className="mt-2 text-lg font-bold">{signal.name ?? signal.symbol}</div>
+                  </div>
+                  <div className="rounded-xl border border-white bg-white p-3">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">行情对象</div>
+                    <div className="mt-2 text-sm leading-6 text-slate-700">{signal.securityLabel ?? `${signal.symbol} · ${signal.name ?? signal.symbol}`}</div>
+                  </div>
+                  <div className="rounded-xl border border-white bg-white p-3">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">绑定键</div>
+                    <div className="mt-2 text-sm leading-6 text-slate-700">{signal.identityKey ?? `${signal.market}:${signal.symbol}`}</div>
+                  </div>
+                </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <div className="rounded-xl border border-white bg-white p-3">
                       <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500">方向</div>
@@ -1059,7 +1106,7 @@ export function SettingsPage() {
                   <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
                     <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 3</div>
                     <div className="mt-2 font-semibold text-slate-900">在 Windows 里运行桥接脚本</div>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">先安装 `pip install futu-api requests`，再运行 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`。</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">先安装 `pip install futu-api requests`，再运行 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`。必须显式带上 `--config`，否则脚本不会读取配置文件。</p>
                   </div>
                   <div className="rounded-2xl border border-white/90 bg-white/90 p-4">
                     <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">Step 4</div>
@@ -1131,23 +1178,52 @@ export function SettingsPage() {
               <div className="mt-3 text-2xl font-black tracking-[-0.04em] text-slate-900">{form.signalSensitivity}</div>
               <p className="mt-2 text-sm leading-6 text-slate-600">当前系统会以 {form.signalSensitivity} 模式评估四类信号，并在达到 {form.highScoreNotifyThreshold} 分时尝试触发自动通知。</p>
             </div>
-            <div className="rounded-2xl border border-pink-200 bg-pink-50/80 p-4">
-              <div className="font-mono text-xs uppercase tracking-[0.24em] text-pink-700">Windows 本地桥接步骤</div>
-              <ol className="mt-3 space-y-2 pl-5 list-decimal">
-                <li>保持 Futu OpenD 已登录，地址为 {form.opendHost}，端口为 {form.opendPort}。</li>
-                <li>在本地桥接程序配置中填入当前页面展示的云端接收地址和桥接令牌。</li>
-                <li>追踪标的默认填入 {trackedSymbolList.join("、")}，桥接程序会周期性拉取报价并回推到本系统。</li>
-                <li>当桥接状态变为“已连接”时，仪表板、观察名單和实时信号页会自动刷新为实时行情驱动。</li>
-              </ol>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-              <div className="flex items-center gap-2 font-semibold text-slate-900"><Clock3 className="h-4 w-4" />当前桥接摘要</div>
-              <div className="mt-3 space-y-2 text-sm text-slate-600">
-                <div>接收地址：{ingestUrl}</div>
-                <div>桥接间隔：{form.publishIntervalSeconds} 秒</div>
-                <div>追踪标的：{trackedSymbolList.join("、")}</div>
+              <div className="rounded-2xl border border-pink-200 bg-pink-50/80 p-4">
+                <div className="font-mono text-xs uppercase tracking-[0.24em] text-pink-700">Windows 本地桥接步骤</div>
+                <ol className="mt-3 space-y-2 pl-5 list-decimal">
+                  <li>保持 Futu OpenD 已登录，地址为 {form.opendHost}，端口为 {form.opendPort}。</li>
+                  <li>在本地桥接程序配置中填入当前页面展示的云端接收地址和桥接令牌，配置键名需使用 `cloud_ingest_url`、`bridge_token`、`opend_host`、`opend_port`、`tracked_symbols`、`publish_interval_seconds`。</li>
+                  <li>追踪标的默认填入 {trackedSymbolList.join("、")}，`tracked_symbols` 必须是非空数组，例如 `["03690","09992"]`，否则会报 `tracked_symbols 不能为空`。</li>
+                  <li>启动时必须使用 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`；在 PowerShell 中也必须保留 `--config` 与配置文件路径的显式写法。</li>
+                  <li>当桥接状态变为“已连接”时，仪表板、观察名單和实时信号页会自动刷新为实时行情驱动。</li>
+                </ol>
               </div>
-            </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <div className="flex items-center gap-2 font-semibold text-slate-900"><Clock3 className="h-4 w-4" />当前桥接摘要</div>
+                <div className="mt-3 space-y-2 text-sm text-slate-600">
+                  <div>接收地址：{ingestUrl}</div>
+                  <div>桥接间隔：{form.publishIntervalSeconds} 秒</div>
+                  <div>追踪标的：{trackedSymbolList.join("、")}</div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-cyan-200 bg-cyan-50/80 p-4">
+                <div className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-700">可直接复制的 PowerShell 启动命令</div>
+                <pre className="mt-3 overflow-x-auto rounded-2xl bg-slate-950/95 p-4 font-mono text-xs leading-6 text-cyan-100">python .\\windows_futu_bridge.py --config .\\bridge_config.json</pre>
+                <p className="mt-3 text-sm leading-6 text-slate-700">如果配置文件不在当前目录，请写完整路径，例如：`python .\\windows_futu_bridge.py --config C:\\futu\\bridge_config.json`。PowerShell 下不要省略 `--config`，也不要把 JSON 路径写成位置参数。</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white/90 p-4">
+                <div className="font-mono text-xs uppercase tracking-[0.24em] text-slate-500">bridge_config.json 键名示例</div>
+                <pre className="mt-3 overflow-x-auto rounded-2xl bg-slate-950/95 p-4 font-mono text-xs leading-6 text-cyan-100">{`{
+  "cloud_ingest_url": "${ingestUrl}",
+  "bridge_token": "${form.bridgeToken}",
+  "opend_host": "${form.opendHost}",
+  "opend_port": ${form.opendPort},
+  "tracked_symbols": ["03690", "09992"],
+  "publish_interval_seconds": ${form.publishIntervalSeconds}
+}`}</pre>
+              </div>
+              <div className="rounded-2xl border border-pink-200 bg-pink-50/80 p-4 text-sm leading-7 text-pink-900">
+                <div className="font-semibold">首轮启动后如何验证与排错</div>
+                <div className="mt-3 space-y-2">
+                  <p>如果提示“参数缺失”，通常表示命令里漏掉了 `--config` 或配置文件路径。</p>
+                  <p>如果提示“配置文件不存在”，请确认 `bridge_config.json` 的真实路径与 PowerShell 当前目录一致，必要时改用绝对路径。</p>
+                  <p>如果日志提示“云端地址未填写”，请检查 `cloud_ingest_url` 是否完整复制自当前页面的接收地址。</p>
+                  <p>如果显示“OpenD 未连接”，说明 Windows 本机的 Futu OpenD 尚未登录或地址 / 端口与这里填写的不一致。</p>
+                  <p>如果出现 `tracked_symbols 不能为空`，请把 `tracked_symbols` 写成至少包含一个代码的数组，推荐直接使用 `["03690", "09992"]` 进行首轮验证。</p>
+                </div>
+              </div>
+
           </CardContent>
         </Card>
       </div>
