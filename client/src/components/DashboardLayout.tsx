@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,27 +22,37 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import {
+  Bell,
+  CandlestickChart,
+  LayoutDashboard,
+  LineChart,
+  LogOut,
+  PanelLeft,
+  Radar,
+  Settings2,
+  Target,
+} from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
-import { Button } from "./ui/button";
+import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: LayoutDashboard, label: "仪表板主页", path: "/" },
+  { icon: Radar, label: "观察名單", path: "/watchlist" },
+  { icon: CandlestickChart, label: "实时信号", path: "/signals" },
+  { icon: Bell, label: "告警历史", path: "/alerts" },
+  { icon: LineChart, label: "盘前扫描", path: "/scans" },
+  { icon: Target, label: "盘后复盘", path: "/review" },
+  { icon: Settings2, label: "系统设置", path: "/settings" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
-const DEFAULT_WIDTH = 280;
-const MIN_WIDTH = 200;
-const MAX_WIDTH = 480;
+const DEFAULT_WIDTH = 304;
+const MIN_WIDTH = 220;
+const MAX_WIDTH = 420;
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
@@ -53,30 +64,27 @@ export default function DashboardLayout({
   }, [sidebarWidth]);
 
   if (loading) {
-    return <DashboardLayoutSkeleton />
+    return <DashboardLayoutSkeleton />;
   }
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
-          <div className="flex flex-col items-center gap-6">
-            <h1 className="text-2xl font-semibold tracking-tight text-center">
-              Sign in to continue
-            </h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to launch the login flow.
-            </p>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.24),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.18),transparent_28%),linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px)] [background-size:auto,auto,28px_28px,28px_28px]">
+        <div className="container flex min-h-screen items-center justify-center py-12">
+          <div className="w-full max-w-xl rounded-[2rem] border border-white/80 bg-white/90 p-10 shadow-[0_30px_80px_-48px_rgba(14,116,144,0.6)] backdrop-blur-sm">
+            <div className="space-y-5 text-center">
+              <div className="mx-auto inline-flex rounded-full border border-cyan-200 bg-cyan-50 px-4 py-2 font-mono text-xs uppercase tracking-[0.28em] text-cyan-800">
+                Shawn Wang 量化盯盘系统
+              </div>
+              <h1 className="text-4xl font-black tracking-[-0.05em] text-slate-950">登录后进入智能交易信号工作台</h1>
+              <p className="mx-auto max-w-lg text-sm leading-7 text-slate-600">
+                该系统会集中展示美股与港股的观察名單、实时信号、结构化交易建议、盘前扫描与盘后复盘，并在高评分机会出现时自动尝试发送通知。
+              </p>
+            </div>
+            <Button onClick={() => { window.location.href = getLoginUrl(); }} size="lg" className="mt-8 h-12 w-full rounded-xl text-base">
+              登录并进入系统
+            </Button>
           </div>
-          <Button
-            onClick={() => {
-              window.location.href = getLoginUrl();
-            }}
-            size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
-          >
-            Sign in
-          </Button>
         </div>
       </div>
     );
@@ -84,15 +92,9 @@ export default function DashboardLayout({
 
   return (
     <SidebarProvider
-      style={
-        {
-          "--sidebar-width": `${sidebarWidth}px`,
-        } as CSSProperties
-      }
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
-      <DashboardLayoutContent setSidebarWidth={setSidebarWidth}>
-        {children}
-      </DashboardLayoutContent>
+      <DashboardLayoutContent setSidebarWidth={setSidebarWidth}>{children}</DashboardLayoutContent>
     </SidebarProvider>
   );
 }
@@ -102,17 +104,14 @@ type DashboardLayoutContentProps = {
   setSidebarWidth: (width: number) => void;
 };
 
-function DashboardLayoutContent({
-  children,
-  setSidebarWidth,
-}: DashboardLayoutContentProps) {
+function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
+  const activeMenuItem = menuItems.find(item => item.path === location) ?? menuItems[0];
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -122,19 +121,16 @@ function DashboardLayoutContent({
   }, [isCollapsed]);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMouseMove = (event: MouseEvent) => {
       if (!isResizing) return;
-
       const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
-      const newWidth = e.clientX - sidebarLeft;
+      const newWidth = event.clientX - sidebarLeft;
       if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
         setSidebarWidth(newWidth);
       }
     };
 
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
+    const handleMouseUp = () => setIsResizing(false);
 
     if (isResizing) {
       document.addEventListener("mousemove", handleMouseMove);
@@ -154,32 +150,30 @@ function DashboardLayoutContent({
   return (
     <>
       <div className="relative" ref={sidebarRef}>
-        <Sidebar
-          collapsible="icon"
-          className="border-r-0"
-          disableTransition={isResizing}
-        >
-          <SidebarHeader className="h-16 justify-center">
-            <div className="flex items-center gap-3 px-2 transition-all w-full">
+        <Sidebar collapsible="icon" className="border-r-0 bg-transparent" disableTransition={isResizing}>
+          <SidebarHeader className="border-b border-sidebar-border/70 px-3 py-4">
+            <div className="flex items-center gap-3">
               <button
                 onClick={toggleSidebar}
-                className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sidebar-border/70 bg-white/80 text-slate-600 transition-colors hover:bg-white"
                 aria-label="Toggle navigation"
               >
-                <PanelLeft className="h-4 w-4 text-muted-foreground" />
+                <PanelLeft className="h-4 w-4" />
               </button>
               {!isCollapsed ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold tracking-tight truncate">
-                    Navigation
-                  </span>
+                <div className="min-w-0">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.28em] text-cyan-700">Signal Blueprint</div>
+                  <div className="truncate text-base font-black tracking-[-0.04em] text-slate-950">Shawn Wang 量化盯盘系统</div>
                 </div>
               ) : null}
             </div>
           </SidebarHeader>
 
-          <SidebarContent className="gap-0">
-            <SidebarMenu className="px-2 py-1">
+          <SidebarContent className="bg-transparent px-2 py-4">
+            <div className="mb-3 px-2 font-mono text-[11px] uppercase tracking-[0.26em] text-slate-500 group-data-[collapsible=icon]:hidden">
+              Workspace
+            </div>
+            <SidebarMenu className="gap-1">
               {menuItems.map(item => {
                 const isActive = location === item.path;
                 return (
@@ -188,11 +182,9 @@ function DashboardLayoutContent({
                       isActive={isActive}
                       onClick={() => setLocation(item.path)}
                       tooltip={item.label}
-                      className={`h-10 transition-all font-normal`}
+                      className="h-11 rounded-xl font-medium"
                     >
-                      <item.icon
-                        className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
-                      />
+                      <item.icon className={`h-4 w-4 ${isActive ? "text-cyan-700" : "text-slate-500"}`} />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -201,39 +193,32 @@ function DashboardLayoutContent({
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="p-3">
+          <SidebarFooter className="border-t border-sidebar-border/70 p-3">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <Avatar className="h-9 w-9 border shrink-0">
-                    <AvatarFallback className="text-xs font-medium">
-                      {user?.name?.charAt(0).toUpperCase()}
+                <button className="flex w-full items-center gap-3 rounded-2xl border border-sidebar-border/70 bg-white/80 px-2 py-2 text-left transition-colors hover:bg-white group-data-[collapsible=icon]:justify-center">
+                  <Avatar className="h-10 w-10 shrink-0 border border-cyan-200">
+                    <AvatarFallback className="bg-cyan-50 text-sm font-semibold text-cyan-900">
+                      {user?.name?.charAt(0).toUpperCase() || "S"}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                    <p className="text-sm font-medium truncate leading-none">
-                      {user?.name || "-"}
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate mt-1.5">
-                      {user?.email || "-"}
-                    </p>
+                  <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+                    <p className="truncate text-sm font-semibold text-slate-900">{user?.name || "Shawn Wang"}</p>
+                    <p className="mt-1 truncate text-xs text-slate-500">{user?.email || "Owner Session"}</p>
                   </div>
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  onClick={logout}
-                  className="cursor-pointer text-destructive focus:text-destructive"
-                >
+                <DropdownMenuItem onClick={logout} className="cursor-pointer text-destructive focus:text-destructive">
                   <LogOut className="mr-2 h-4 w-4" />
-                  <span>Sign out</span>
+                  <span>退出登录</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarFooter>
         </Sidebar>
         <div
-          className={`absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
+          className={`absolute right-0 top-0 h-full w-1 cursor-col-resize transition-colors hover:bg-cyan-300/60 ${isCollapsed ? "hidden" : ""}`}
           onMouseDown={() => {
             if (isCollapsed) return;
             setIsResizing(true);
@@ -242,22 +227,21 @@ function DashboardLayoutContent({
         />
       </div>
 
-      <SidebarInset>
-        {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
+      <SidebarInset className="bg-transparent">
+        {isMobile ? (
+          <div className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border/70 bg-white/85 px-3 backdrop-blur-sm">
             <div className="flex items-center gap-2">
-              <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
-              <div className="flex items-center gap-3">
-                <div className="flex flex-col gap-1">
-                  <span className="tracking-tight text-foreground">
-                    {activeMenuItem?.label ?? "Menu"}
-                  </span>
-                </div>
+              <SidebarTrigger className="h-10 w-10 rounded-xl border border-border/70 bg-white/90" />
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-700">Signal Blueprint</div>
+                <div className="text-sm font-semibold text-slate-900">{activeMenuItem.label}</div>
               </div>
             </div>
           </div>
-        )}
-        <main className="flex-1 p-4">{children}</main>
+        ) : null}
+        <main className="min-h-screen flex-1 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.16),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px)] [background-size:auto,auto,28px_28px,28px_28px] p-4 md:p-6">
+          {children}
+        </main>
       </SidebarInset>
     </>
   );
