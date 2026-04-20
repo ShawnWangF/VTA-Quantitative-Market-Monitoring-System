@@ -6,6 +6,16 @@ export type SignalSensitivity = "保守" | "标准" | "激进";
 export type BridgeConnectionStatus = "未连接" | "已连接" | "陈旧" | "异常";
 export type QuoteSourceMode = "demo" | "live";
 export type TriggerAction = "买入提醒" | "卖出提醒" | "观察提醒";
+export type StrategyOutcomeStatus = "待验证" | "已验证有效" | "已验证失效";
+
+export type PriceHistoryPoint = {
+  timestampMs: number;
+  label: string;
+  price: number;
+  forecastPrice: number;
+  volume: number;
+  changePct: number;
+};
 
 export type WatchlistRecord = {
   id: number;
@@ -37,6 +47,8 @@ export type SignalRecord = {
   score: number;
   triggerReason: string;
   riskTags: string[];
+  riskLevel: "低" | "中" | "高";
+  executionPrerequisite: string;
   direction: Direction;
   triggerAction: TriggerAction;
   triggerPrice: number;
@@ -46,10 +58,21 @@ export type SignalRecord = {
   stopLoss: string;
   rationale: string;
   llmInterpretation: string | null;
+  llmForecastSummary: string | null;
+  llmForecastBias: string | null;
+  llmForecastSlope: number | null;
+  llmForecastConfidence: number | null;
+  llmForecastGeneratedAtMs: number | null;
   sourceMode: QuoteSourceMode;
   quotePrice: number;
   quoteChangePct: number;
   quoteVolume: number;
+  learningStatus: StrategyOutcomeStatus;
+  realizedReturnPct: number | null;
+  adverseMovePct: number | null;
+  failureReason: string | null;
+  reviewedAtMs: number | null;
+  strategyWeight: number;
   createdAtMs: number;
 };
 
@@ -133,6 +156,7 @@ export type TradingWorkspace = {
   scanResults: ScanRecord[];
   reviewReport: ReviewRecord;
   settings: SettingsRecord;
+  priceHistory: Record<string, PriceHistoryPoint[]>;
   nextIds: {
     watchlist: number;
     signal: number;
@@ -197,6 +221,26 @@ function seededWatchlist(userId: number): WatchlistRecord[] {
   ];
 }
 
+function createSeedHistory(lastPrice: number, prevClosePrice: number, volume: number): PriceHistoryPoint[] {
+  const points = 24;
+  return Array.from({ length: points }, (_, index) => {
+    const progress = index / (points - 1);
+    const wave = Math.sin(index / 3) * lastPrice * 0.0035;
+    const drift = (lastPrice - prevClosePrice) * progress;
+    const price = Number((prevClosePrice + drift + wave).toFixed(2));
+    const changePct = prevClosePrice > 0 ? Number((((price - prevClosePrice) / prevClosePrice) * 100).toFixed(2)) : 0;
+    const forecastDelta = Math.cos(index / 4) * lastPrice * 0.002 + (lastPrice - price) * 0.18;
+    return {
+      timestampMs: now - (points - index) * 4 * 60 * 1000,
+      label: new Date(now - (points - index) * 4 * 60 * 1000).toLocaleTimeString("zh-Hans", { hour: "2-digit", minute: "2-digit" }),
+      price,
+      forecastPrice: Number((price + forecastDelta).toFixed(2)),
+      volume: Math.round(volume * (0.55 + progress * 0.45)),
+      changePct,
+    };
+  });
+}
+
 function seededSignals(userId: number): SignalRecord[] {
   return [
     {
@@ -208,6 +252,8 @@ function seededSignals(userId: number): SignalRecord[] {
       score: 90,
       triggerReason: "泡泡玛特早盘跳空后持续放量，价格贴近当日高点，趋势启动结构清晰。",
       riskTags: ["高位波动", "追价滑点"],
+      riskLevel: "高",
+      executionPrerequisite: "价格放量站上触发位后，至少一个刷新周期不跌回触发位下方。",
       direction: "做多",
       triggerAction: "买入提醒",
       triggerPrice: 37.05,
@@ -217,10 +263,21 @@ function seededSignals(userId: number): SignalRecord[] {
       stopLoss: "跌破 35.95 需降低仓位",
       rationale: "价格与成交额同步提升，属于高景气题材下的动量延续结构。",
       llmInterpretation: null,
+      llmForecastSummary: "大模型判断该标的仍处于偏多延续结构，但需要防止高位放量后的冲高回落。",
+      llmForecastBias: "偏多延续",
+      llmForecastSlope: 0.38,
+      llmForecastConfidence: 88,
+      llmForecastGeneratedAtMs: now - 3 * 60 * 1000,
       sourceMode: "demo",
       quotePrice: 36.92,
       quoteChangePct: 3.12,
       quoteVolume: 10682000,
+      learningStatus: "已验证有效",
+      realizedReturnPct: 4.6,
+      adverseMovePct: -0.9,
+      failureReason: null,
+      reviewedAtMs: now - 2 * 60 * 1000,
+      strategyWeight: 1.08,
       createdAtMs: now - 4 * 60 * 1000,
     },
     {
@@ -232,6 +289,8 @@ function seededSignals(userId: number): SignalRecord[] {
       score: 82,
       triggerReason: "美团早盘上冲后回踩开盘中轴企稳，重新站回短线强势区。",
       riskTags: ["午后回落", "二次确认失败"],
+      riskLevel: "中",
+      executionPrerequisite: "回踩后不跌破关键承接位，并重新站回触发价。",
       direction: "做多",
       triggerAction: "买入提醒",
       triggerPrice: 117.85,
@@ -241,10 +300,21 @@ function seededSignals(userId: number): SignalRecord[] {
       stopLoss: "失守 116.35 需谨慎",
       rationale: "回踩后的承接仍在，若再度放量，具备继续向上试高的条件。",
       llmInterpretation: null,
+      llmForecastSummary: "大模型判断回踩结构尚未破坏，若承接维持，后续仍有再次上探的概率。",
+      llmForecastBias: "回踩偏多",
+      llmForecastSlope: 0.21,
+      llmForecastConfidence: 81,
+      llmForecastGeneratedAtMs: now - 8 * 60 * 1000,
       sourceMode: "demo",
       quotePrice: 117.8,
       quoteChangePct: 1.46,
       quoteVolume: 18243000,
+      learningStatus: "待验证",
+      realizedReturnPct: null,
+      adverseMovePct: null,
+      failureReason: null,
+      reviewedAtMs: null,
+      strategyWeight: 1.02,
       createdAtMs: now - 11 * 60 * 1000,
     },
   ];
@@ -379,13 +449,20 @@ function seededSettings(userId: number): SettingsRecord {
 }
 
 function createSeedWorkspace(userId: number): TradingWorkspace {
+  const watchlistItems = seededWatchlist(userId);
   return {
-    watchlistItems: seededWatchlist(userId),
+    watchlistItems,
     signals: seededSignals(userId),
     alerts: seededAlerts(userId),
     scanResults: seededScans(userId),
     reviewReport: seededReview(userId),
     settings: seededSettings(userId),
+    priceHistory: Object.fromEntries(
+      watchlistItems.map(item => [
+        `${item.market}:${item.symbol}`,
+        createSeedHistory(item.lastPrice, item.prevClosePrice, item.volume),
+      ])
+    ),
     nextIds: {
       watchlist: 3,
       signal: 3,

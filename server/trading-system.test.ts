@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
-import { getSettings, ingestLiveQuotes, listSignals, listWatchlist } from "./db";
+import { getSettings, ingestLiveQuotes, listScopedSignals, listSignals, listWatchlist, summarizeDashboard } from "./db";
 import { resetWorkspace } from "./mockData";
 
 const notifyOwnerMock = vi.fn(async () => true);
@@ -265,6 +265,81 @@ describe("trading signal monitoring system", () => {
     expect(watchlist.find(item => item.symbol === "03690")?.sourceMode).toBe("live");
     expect(watchlist.find(item => item.symbol === "09992")?.sourceMode).toBe("live");
     expect(signals.some(signal => signal.sourceMode === "live" && signal.market === "HK")).toBe(true);
+  });
+
+  it("returns scoped display signals for tracked symbols and prefers live signals over demo duplicates", async () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 38.8,
+          volume: 13800000,
+          turnover: 512000000,
+          openPrice: 36.9,
+          highPrice: 39.0,
+          lowPrice: 36.8,
+          prevClosePrice: 36.1,
+        },
+      ],
+    });
+
+    const displaySignals = listScopedSignals(1);
+    const symbolList = displaySignals.map(signal => signal.symbol);
+
+    expect(new Set(symbolList).size).toBe(displaySignals.length);
+    expect(symbolList.every(symbol => ["03690", "09992"].includes(symbol))).toBe(true);
+    expect(displaySignals.find(signal => signal.symbol === "09992")?.sourceMode).toBe("live");
+  });
+
+  it("builds dashboard forecast panels with chart data and strategy learning summaries", () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "03690",
+          name: "美团-W",
+          lastPrice: 121.2,
+          volume: 19800000,
+          turnover: 2520000000,
+          openPrice: 118.8,
+          highPrice: 121.5,
+          lowPrice: 118.1,
+          prevClosePrice: 117.1,
+        },
+      ],
+    });
+
+    const overview = summarizeDashboard(1);
+    expect(overview.liveBoard.length).toBeGreaterThan(0);
+    expect(overview.liveBoard[0]?.chart.length).toBeGreaterThan(10);
+    expect(overview.liveBoard[0]?.forecastSummary).toMatchObject({
+      trendBias: expect.any(String),
+      predictedPrice: expect.any(Number),
+      confidence: expect.any(Number),
+    });
+    expect(overview.liveBoard[0]).toMatchObject({
+      executionPrerequisite: expect.any(String),
+      riskLevel: expect.any(String),
+      llmForecastSummary: expect.any(String),
+      latestMarker: {
+        label: expect.any(String),
+        price: expect.any(Number),
+      },
+    });
+    expect(overview.strategyLearning).toMatchObject({
+      successRate: expect.any(Number),
+      adaptiveWeight: expect.any(Number),
+    });
   });
 
   it("tests bridge connectivity using recent heartbeat and quote status", async () => {

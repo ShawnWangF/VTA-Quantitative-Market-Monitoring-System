@@ -12,6 +12,7 @@ import {
   type ReviewRecord,
   type ScanRecord,
   type SettingsRecord,
+  type PriceHistoryPoint,
   type SignalRecord,
   type SignalSensitivity,
   type SignalType,
@@ -25,6 +26,8 @@ let _db: ReturnType<typeof drizzle> | null = null;
 const PRODUCT_NAME = "Shawn Wang 量化盯盘系统";
 const LIVE_STALE_MS = 20_000;
 const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000;
+const PRICE_HISTORY_LIMIT = 90;
+const FORECAST_POINT_COUNT = 6;
 
 type LiveQuoteInput = {
   market: Market;
@@ -49,6 +52,8 @@ type SignalBlueprint = {
   invalidationCondition: string;
   triggerReason: string;
   riskTags: string[];
+  riskLevel: "低" | "中" | "高";
+  executionPrerequisite: string;
   entryRange: string;
   stopLoss: string;
   rationale: string;
@@ -212,6 +217,164 @@ function sensitivityAdjustment(sensitivity: SignalSensitivity) {
   return 0;
 }
 
+function symbolKey(market: Market, symbol: string) {
+  return `${market}:${normalizeSymbol(market, symbol)}`;
+}
+
+function timeLabel(timestampMs: number) {
+  return new Date(timestampMs).toLocaleTimeString("zh-Hans", { hour: "2-digit", minute: "2-digit" });
+}
+
+function scopedWatchlist(userId: number): WatchlistRecord[] {
+  const workspace = getWorkspace(userId);
+  const sorted = [...workspace.watchlistItems].sort((a, b) => b.priority - a.priority || b.updatedAt - a.updatedAt || a.symbol.localeCompare(b.symbol));
+  const tracked = workspace.settings.liveBridge.trackedSymbols;
+  if (workspace.settings.liveBridge.useLiveQuotes && tracked.length > 0) {
+    const trackedKeys = new Set(tracked.map(symbol => symbolKey("HK", symbol)));
+    const filtered = sorted.filter(item => trackedKeys.has(symbolKey(item.market, item.symbol)));
+    if (filtered.length > 0) return filtered;
+  }
+  return sorted.filter(item => item.isActive === 1);
+}
+
+function scopedSignalFilter(userId: number, signals: SignalRecord[]) {
+  const scopedKeys = new Set(scopedWatchlist(userId).map(item => symbolKey(item.market, item.symbol)));
+  return signals.filter(signal => scopedKeys.has(symbolKey(signal.market, signal.symbol)));
+}
+
+function signalPriorityValue(signal: SignalRecord) {
+  return (signal.sourceMode === "live" ? 10_000_000 : 0) + signal.createdAtMs + signal.score * 10;
+}
+
+function listDisplaySignals(userId: number): SignalRecord[] {
+  const unique = new Map<string, SignalRecord>();
+  for (const signal of scopedSignalFilter(userId, listSignals(userId))) {
+    const key = symbolKey(signal.market, signal.symbol);
+    const current = unique.get(key);
+    if (!current || signalPriorityValue(signal) > signalPriorityValue(current)) {
+      unique.set(key, signal);
+    }
+  }
+  return Array.from(unique.values()).sort((a, b) => signalPriorityValue(b) - signalPriorityValue(a));
+}
+
+function evaluateSignalOutcome(signal: SignalRecord, currentPrice: number) {
+  const stopLoss = signal.stopLossPrice ?? signal.triggerPrice;
+  if (signal.triggerAction === "买入提醒") {
+    const realizedReturnPct = round(((currentPrice - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100, 2);
+    const adverseMovePct = round(((Math.min(currentPrice, stopLoss) - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100, 2);
+    if (currentPrice >= signal.triggerPrice * 1.01) {
+      return { learningStatus: "已验证有效" as const, realizedReturnPct, adverseMovePct, failureReason: null, reviewedAtMs: Date.now() };
+    }
+    if (currentPrice <= stopLoss) {
+      return { learningStatus: "已验证失效" as const, realizedReturnPct, adverseMovePct, failureReason: `买入提醒触发后价格跌破止损位 ${stopLoss}。`, reviewedAtMs: Date.now() };
+    }
+    return { learningStatus: "待验证" as const, realizedReturnPct, adverseMovePct, failureReason: null, reviewedAtMs: null };
+  }
+
+  if (signal.triggerAction === "卖出提醒") {
+    const realizedReturnPct = round(((signal.triggerPrice - currentPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100, 2);
+    const adverseMovePct = round(((signal.triggerPrice - Math.max(currentPrice, stopLoss)) / Math.max(signal.triggerPrice, 0.0001)) * 100, 2);
+    if (currentPrice <= signal.triggerPrice * 0.99) {
+      return { learningStatus: "已验证有效" as const, realizedReturnPct, adverseMovePct, failureReason: null, reviewedAtMs: Date.now() };
+    }
+    if (currentPrice >= stopLoss) {
+      return { learningStatus: "已验证失效" as const, realizedReturnPct, adverseMovePct, failureReason: `卖出提醒触发后价格重新站回止损位 ${stopLoss} 上方。`, reviewedAtMs: Date.now() };
+    }
+    return { learningStatus: "待验证" as const, realizedReturnPct, adverseMovePct, failureReason: null, reviewedAtMs: null };
+  }
+
+  return {
+    learningStatus: signal.learningStatus,
+    realizedReturnPct: signal.realizedReturnPct,
+    adverseMovePct: signal.adverseMovePct,
+    failureReason: signal.failureReason,
+    reviewedAtMs: signal.reviewedAtMs,
+  };
+}
+
+function summarizeSignalLearning(signals: SignalRecord[]) {
+  const evaluated = signals.filter(signal => signal.learningStatus !== "待验证" && signal.realizedReturnPct !== null);
+  const successful = evaluated.filter(signal => signal.learningStatus === "已验证有效");
+  const successRate = evaluated.length > 0 ? round((successful.length / evaluated.length) * 100, 1) : 0;
+  const averageReturnPct = evaluated.length > 0
+    ? round(evaluated.reduce((sum, signal) => sum + (signal.realizedReturnPct ?? 0), 0) / evaluated.length, 2)
+    : 0;
+  const averageAdversePct = evaluated.length > 0
+    ? round(evaluated.reduce((sum, signal) => sum + Math.abs(signal.adverseMovePct ?? 0), 0) / evaluated.length, 2)
+    : 0;
+  const adaptiveWeight = clamp(round(0.9 + successRate / 100 * 0.18 + averageReturnPct / 50 - averageAdversePct / 80, 2), 0.82, 1.18);
+  return { evaluatedCount: evaluated.length, successRate, averageReturnPct, averageAdversePct, adaptiveWeight };
+}
+
+function strategyWeightForSignalType(workspace: TradingWorkspace, signalType: SignalType) {
+  const summary = summarizeSignalLearning(workspace.signals.filter(signal => signal.signalType === signalType));
+  return summary.adaptiveWeight;
+}
+
+function updateSignalLearningFromQuote(userId: number, quote: LiveQuoteInput) {
+  const workspace = getWorkspace(userId);
+  const normalizedSymbol = normalizeSymbol(quote.market, quote.symbol);
+  for (const signal of workspace.signals) {
+    if (signal.market !== quote.market || signal.symbol !== normalizedSymbol) continue;
+    const learning = evaluateSignalOutcome(signal, quote.lastPrice);
+    signal.learningStatus = learning.learningStatus;
+    signal.realizedReturnPct = learning.realizedReturnPct;
+    signal.adverseMovePct = learning.adverseMovePct;
+    signal.failureReason = learning.failureReason;
+    signal.reviewedAtMs = learning.reviewedAtMs;
+  }
+}
+
+function buildForecastCurve(item: WatchlistRecord, history: PriceHistoryPoint[], signal: SignalRecord | null) {
+  const recent = history.slice(-12);
+  const latest = recent[recent.length - 1];
+  const basePrice = latest?.price ?? item.lastPrice;
+  const historicalSlope = recent.length > 1 ? (recent[recent.length - 1].price - recent[0].price) / Math.max(recent.length - 1, 1) : 0;
+  const slope = signal?.llmForecastSlope ?? historicalSlope;
+  const volatility = recent.length > 1
+    ? recent.slice(1).reduce((sum, point, index) => sum + Math.abs(point.price - recent[index].price), 0) / Math.max(recent.length - 1, 1)
+    : Math.max(item.lastPrice * 0.002, 0.01);
+  const directionalBias = signal?.triggerAction === "卖出提醒" ? -1 : signal?.triggerAction === "买入提醒" ? 1 : Math.sign(item.changePct || slope || 0.01);
+  const strategyWeight = signal?.strategyWeight ?? 1;
+  const llmConfidenceFactor = (signal?.llmForecastConfidence ?? 75) / 100;
+  const future = Array.from({ length: FORECAST_POINT_COUNT }, (_, index) => {
+    const step = index + 1;
+    const timestampMs = (latest?.timestampMs ?? Date.now()) + step * 4 * 60 * 1000;
+    const forecastPrice = round(basePrice + slope * step + directionalBias * volatility * strategyWeight * llmConfidenceFactor * step, 2);
+    return {
+      timestampMs,
+      label: timeLabel(timestampMs),
+      price: null,
+      forecastPrice,
+      volume: 0,
+      changePct: item.prevClosePrice > 0 ? round(((forecastPrice - item.prevClosePrice) / item.prevClosePrice) * 100, 2) : 0,
+    };
+  });
+
+  return [
+    ...history.map(point => ({ ...point, price: point.price, forecastPrice: point.forecastPrice })),
+    ...future,
+  ];
+}
+
+function upsertPriceHistory(userId: number, quote: LiveQuoteInput) {
+  const workspace = getWorkspace(userId);
+  const key = symbolKey(quote.market, quote.symbol);
+  const timestampMs = Date.now();
+  const previousHistory = workspace.priceHistory[key] ?? [];
+  const prevClose = Math.max(quote.prevClosePrice, 0.0001);
+  const nextPoint: PriceHistoryPoint = {
+    timestampMs,
+    label: timeLabel(timestampMs),
+    price: round(quote.lastPrice),
+    forecastPrice: round(quote.lastPrice),
+    volume: Math.round(quote.volume),
+    changePct: round(((quote.lastPrice - prevClose) / prevClose) * 100, 2),
+  };
+  workspace.priceHistory[key] = [...previousHistory, nextPoint].slice(-PRICE_HISTORY_LIMIT);
+}
+
 function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): SignalBlueprint | null {
   const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
   const pullbackFromHighPct = quote.highPrice > 0 ? ((quote.highPrice - quote.lastPrice) / quote.highPrice) * 100 : 0;
@@ -233,6 +396,8 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       invalidationCondition: `若回落并跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))}，则本次突破买入逻辑失效。`,
       triggerReason: `${baseReason}价格贴近当日高点且量价共振，符合突破啟動结构。`,
       riskTags: ["追价滑点", "高位波动"],
+      riskLevel: "高",
+      executionPrerequisite: "价格放量站上当日高点后，至少一个刷新周期不跌回触发位下方。",
       entryRange: `买入触发价 ${round(quote.highPrice)}`,
       stopLoss: `跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))} 需降低仓位`,
       rationale: "当前属于顺势启动型结构，更适合等待明确突破点触发后的跟进，而不是无保护追高。",
@@ -251,6 +416,8 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       invalidationCondition: `若失守 ${round(quote.openPrice * 0.995)}，说明回踩承接失败，本次买入提醒失效。`,
       triggerReason: `${baseReason}冲高后并未深度破坏结构，回踩仍保持在强势区，符合回踩續強特征。`,
       riskTags: ["二次确认失败", "午后回落"],
+      riskLevel: "中",
+      executionPrerequisite: "回踩后仍守住关键承接位，并重新站回触发价。",
       entryRange: `买入触发价 ${round(quote.lastPrice)}`,
       stopLoss: `失守 ${round(quote.openPrice * 0.995)} 需谨慎`,
       rationale: "适合把回踩后的承接强度作为入场依据，一旦价格重新站稳当前触发点，可视作跟进信号。",
@@ -271,6 +438,8 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
         : `若重新站上 ${round(quote.highPrice)}，则卖方失衡信号失效。`,
       triggerReason: `${baseReason}价格波动有限但成交明显抬升，说明短线买卖力量正在重新分配。`,
       riskTags: ["需要盘口确认", "假突破风险"],
+      riskLevel: "中",
+      executionPrerequisite: changePct >= 0 ? "量能抬升且价格继续稳在触发价上方。" : "卖压持续增强且价格无法重新站回触发价。",
       entryRange: `${changePct >= 0 ? "买入" : "卖出"}触发价 ${round(quote.lastPrice)}`,
       stopLoss: changePct >= 0 ? `若跌回 ${round(quote.lowPrice)} 下方则取消观察` : `若重新站上 ${round(quote.highPrice)} 上方则取消观察`,
       rationale: "该信号强调力量失衡形成的实时节点，适合作为盘中买卖提醒，而不是宽泛区间预测。",
@@ -289,6 +458,8 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       invalidationCondition: `若重新站回 ${round(quote.highPrice * 0.997)} 上方，则本次卖出提醒失效。`,
       triggerReason: `${baseReason}价格从高位回落幅度扩大，冲高后的跟随资金不足，出现冲高衰竭迹象。`,
       riskTags: ["高位回落", "承接减弱"],
+      riskLevel: "中",
+      executionPrerequisite: "冲高后承接持续减弱，且价格无法重新站回高位压力区。",
       entryRange: `卖出触发价 ${round(quote.lastPrice)}`,
       stopLoss: `重新站回 ${round(quote.highPrice * 0.997)} 上方则撤销衰竭判断`,
       rationale: "这类结构更适合作为卖出或减仓提醒，应优先管理已有盈利与高位回撤风险。",
@@ -301,16 +472,20 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
 function buildSignalRecord(userId: number, quote: LiveQuoteInput, settings: SettingsRecord): SignalRecord | null {
   const blueprint = buildSignalBlueprint(quote, settings);
   if (!blueprint) return null;
+  const workspace = getWorkspace(userId);
   const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
+  const strategyWeight = strategyWeightForSignalType(workspace, blueprint.signalType);
   return {
     id: 0,
     userId,
     market: quote.market,
     symbol: normalizeSymbol(quote.market, quote.symbol),
     signalType: blueprint.signalType,
-    score: blueprint.score,
+    score: clamp(Math.round(blueprint.score * strategyWeight), 58, 99),
     triggerReason: blueprint.triggerReason,
     riskTags: blueprint.riskTags,
+    riskLevel: blueprint.riskLevel,
+    executionPrerequisite: blueprint.executionPrerequisite,
     direction: blueprint.direction ?? directionForSignalType(blueprint.signalType),
     triggerAction: blueprint.triggerAction,
     triggerPrice: blueprint.triggerPrice,
@@ -320,10 +495,21 @@ function buildSignalRecord(userId: number, quote: LiveQuoteInput, settings: Sett
     stopLoss: blueprint.stopLoss,
     rationale: blueprint.rationale,
     llmInterpretation: null,
+    llmForecastSummary: null,
+    llmForecastBias: null,
+    llmForecastSlope: null,
+    llmForecastConfidence: null,
+    llmForecastGeneratedAtMs: null,
     sourceMode: "live",
     quotePrice: round(quote.lastPrice),
     quoteChangePct: round(changePct),
     quoteVolume: Math.round(quote.volume),
+    learningStatus: "待验证",
+    realizedReturnPct: null,
+    adverseMovePct: null,
+    failureReason: null,
+    reviewedAtMs: null,
+    strategyWeight,
     createdAtMs: Date.now(),
   };
 }
@@ -345,6 +531,8 @@ function upsertSignalFromQuote(userId: number, quote: LiveQuoteInput, settings: 
     recent.score = candidate.score;
     recent.triggerReason = candidate.triggerReason;
     recent.riskTags = candidate.riskTags;
+    recent.riskLevel = candidate.riskLevel;
+    recent.executionPrerequisite = candidate.executionPrerequisite;
     recent.direction = candidate.direction;
     recent.triggerAction = candidate.triggerAction;
     recent.triggerPrice = candidate.triggerPrice;
@@ -353,10 +541,16 @@ function upsertSignalFromQuote(userId: number, quote: LiveQuoteInput, settings: 
     recent.entryRange = candidate.entryRange;
     recent.stopLoss = candidate.stopLoss;
     recent.rationale = candidate.rationale;
+    recent.llmForecastSummary = candidate.llmForecastSummary;
+    recent.llmForecastBias = candidate.llmForecastBias;
+    recent.llmForecastSlope = candidate.llmForecastSlope;
+    recent.llmForecastConfidence = candidate.llmForecastConfidence;
+    recent.llmForecastGeneratedAtMs = candidate.llmForecastGeneratedAtMs;
     recent.sourceMode = "live";
     recent.quotePrice = candidate.quotePrice;
     recent.quoteChangePct = candidate.quoteChangePct;
     recent.quoteVolume = candidate.quoteVolume;
+    recent.strategyWeight = candidate.strategyWeight;
     recent.createdAtMs = Date.now();
     return recent;
   }
@@ -526,10 +720,36 @@ export function listSignals(userId: number): SignalRecord[] {
   return [...getWorkspace(userId).signals].sort((a, b) => b.createdAtMs - a.createdAtMs);
 }
 
+export function listScopedSignals(userId: number): SignalRecord[] {
+  return listDisplaySignals(userId);
+}
+
 export function updateSignalInterpretation(userId: number, signalId: number, interpretation: string): SignalRecord | null {
   const signal = getWorkspace(userId).signals.find(item => item.id === signalId);
   if (!signal) return null;
   signal.llmInterpretation = interpretation;
+  return signal;
+}
+
+export function updateSignalForecastInsight(
+  userId: number,
+  signalId: number,
+  input: {
+    interpretation?: string | null;
+    forecastSummary?: string | null;
+    forecastBias?: string | null;
+    forecastSlope?: number | null;
+    forecastConfidence?: number | null;
+  }
+): SignalRecord | null {
+  const signal = getWorkspace(userId).signals.find(item => item.id === signalId);
+  if (!signal) return null;
+  if (input.interpretation !== undefined) signal.llmInterpretation = input.interpretation;
+  if (input.forecastSummary !== undefined) signal.llmForecastSummary = input.forecastSummary;
+  if (input.forecastBias !== undefined) signal.llmForecastBias = input.forecastBias;
+  if (input.forecastSlope !== undefined) signal.llmForecastSlope = input.forecastSlope;
+  if (input.forecastConfidence !== undefined) signal.llmForecastConfidence = input.forecastConfidence;
+  signal.llmForecastGeneratedAtMs = Date.now();
   return signal;
 }
 
@@ -660,6 +880,8 @@ export function ingestLiveQuotes(userId: number, input: LiveBridgeIngestInput) {
     };
 
     upsertWatchlistQuote(userId, normalizedQuote);
+    upsertPriceHistory(userId, normalizedQuote);
+    updateSignalLearningFromQuote(userId, normalizedQuote);
     updatedSymbols.push(normalizedQuote.symbol);
     const signal = upsertSignalFromQuote(userId, normalizedQuote, workspace.settings);
     if (signal) {
@@ -701,12 +923,14 @@ export function getMarketStatus() {
 }
 
 export function summarizeDashboard(userId: number) {
-  const watchlist = listWatchlist(userId);
+  const workspace = getWorkspace(userId);
+  const watchlist = scopedWatchlist(userId);
   const signals = listSignals(userId);
-  const alerts = listAlerts(userId);
+  const displaySignals = listDisplaySignals(userId);
+  const alerts = listAlerts(userId).filter(alert => new Set(watchlist.map(item => symbolKey(item.market, item.symbol))).has(symbolKey(alert.market, alert.symbol)));
   const review = getLatestReview(userId);
   const settings = getSettings(userId);
-  const latestSignals = signals.slice(0, 4);
+  const latestSignals = displaySignals.slice(0, 4);
   const alertStats = {
     total: alerts.length,
     critical: alerts.filter(alert => alert.level === "CRITICAL").length,
@@ -715,7 +939,13 @@ export function summarizeDashboard(userId: number) {
   };
 
   const liveBoard = watchlist.slice(0, 8).map(item => {
-    const activeSignal = signals.find(signal => signal.symbol === item.symbol && signal.market === item.market);
+    const activeSignal = displaySignals.find(signal => signal.symbol === item.symbol && signal.market === item.market) ?? null;
+    const signalFamily = signals.filter(signal => signal.symbol === item.symbol && signal.market === item.market);
+    const learning = summarizeSignalLearning(signalFamily);
+    const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
+    const chart = buildForecastCurve(item, history, activeSignal);
+    const forecastEnd = chart[chart.length - 1]?.forecastPrice ?? item.lastPrice;
+    const trendBias = forecastEnd >= item.lastPrice ? "偏多" : "偏空";
     return {
       ...item,
       activeSignalType: activeSignal?.signalType ?? null,
@@ -726,8 +956,40 @@ export function summarizeDashboard(userId: number) {
       suggestionStopLossPrice: activeSignal?.stopLossPrice ?? null,
       suggestionEntryRange: activeSignal?.entryRange ?? null,
       sourceMode: item.sourceMode,
+      chart,
+      forecastSummary: {
+        trendBias,
+        predictedPrice: forecastEnd,
+        predictedChangePct: item.lastPrice > 0 ? round(((forecastEnd - item.lastPrice) / item.lastPrice) * 100, 2) : 0,
+        confidence: Math.round(clamp((activeSignal?.score ?? 72) * (learning.adaptiveWeight ?? 1), 55, 99)),
+      },
+      strategyLearning: {
+        successRate: learning.successRate,
+        evaluatedCount: learning.evaluatedCount,
+        averageReturnPct: learning.averageReturnPct,
+        averageAdversePct: learning.averageAdversePct,
+        adaptiveWeight: learning.adaptiveWeight,
+      },
+      executionPrerequisite: activeSignal?.executionPrerequisite ?? "等待价格与成交量同时确认。",
+      riskLevel: activeSignal?.riskLevel ?? "中",
+      failureReason: activeSignal?.failureReason ?? null,
+      llmStrategyNote: activeSignal?.llmInterpretation ?? `${item.symbol} 当前以${trendBias}策略为主，系统会结合最近信号命中率与回撤表现动态修正后续评分和提醒强度。`,
+      llmForecastSummary: activeSignal?.llmForecastSummary ?? `${item.symbol} 预计短线维持${trendBias}节奏，但仍需结合触发位与止损位执行。`,
+      llmForecastBias: activeSignal?.llmForecastBias ?? trendBias,
+      llmForecastGeneratedAtMs: activeSignal?.llmForecastGeneratedAtMs ?? null,
+      latestMarker: {
+        label: history[history.length - 1]?.label ?? null,
+        price: item.lastPrice,
+      },
+      triggerMarker: activeSignal?.triggerPrice ? {
+        label: history[history.length - 1]?.label ?? null,
+        price: activeSignal.triggerPrice,
+        action: activeSignal.triggerAction,
+      } : null,
     };
   });
+
+  const strategyLearning = summarizeSignalLearning(signals);
 
   return {
     productName: PRODUCT_NAME,
@@ -736,11 +998,20 @@ export function summarizeDashboard(userId: number) {
     latestSignals,
     alertStats,
     hitRate: review.hitRate,
-    highScoreCount: signals.filter(signal => signal.score >= settings.highScoreNotifyThreshold).length,
+    highScoreCount: displaySignals.filter(signal => signal.score >= settings.highScoreNotifyThreshold).length,
     liveBridge: {
       ...settings.liveBridge,
       sourceLabel: settings.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace",
     },
     liveBoard,
+    strategyLearning: {
+      successRate: strategyLearning.successRate,
+      evaluatedCount: strategyLearning.evaluatedCount,
+      averageReturnPct: strategyLearning.averageReturnPct,
+      averageAdversePct: strategyLearning.averageAdversePct,
+      adaptiveWeight: strategyLearning.adaptiveWeight,
+      strongestSignalType: review.meta.accuracyBySignal.sort((a, b) => b.hitRate - a.hitRate)[0]?.signalType ?? "突破啟動",
+      weakestSignalType: review.meta.accuracyBySignal.sort((a, b) => a.hitRate - b.hitRate)[0]?.signalType ?? "盤口失衡",
+    },
   };
 }

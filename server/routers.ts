@@ -12,6 +12,7 @@ import {
   getSettings,
   listAlerts,
   listScanResults,
+  listScopedSignals,
   listSignals,
   listWatchlist,
   markAlertNotificationTriggered,
@@ -19,6 +20,7 @@ import {
   reprioritizeWatchlistItem,
   saveSettings,
   summarizeDashboard,
+  updateSignalForecastInsight,
   updateSignalInterpretation,
 } from "./db";
 
@@ -67,6 +69,83 @@ function fallbackInterpretation(signal: ReturnType<typeof listSignals>[number]) 
   ].join("");
 }
 
+function fallbackForecastInsight(signal: ReturnType<typeof listSignals>[number]) {
+  const bias = signal.direction === "做空" ? "偏空" : signal.direction === "做多" ? "偏多" : "震荡";
+  return {
+    interpretation: fallbackInterpretation(signal),
+    forecastSummary: `${signal.symbol} 当前更接近${bias}节奏，执行上应优先等待 ${signal.triggerAction} 触发并严格遵守失效条件。`,
+    forecastBias: bias,
+    forecastSlope: signal.direction === "做空" ? -0.28 : signal.direction === "做多" ? 0.28 : 0,
+    forecastConfidence: Math.max(55, Math.min(96, signal.score)),
+  };
+}
+
+async function ensureDashboardForecastInsights(userId: number) {
+  const scopedSignals = listScopedSignals(userId).slice(0, 4);
+
+  for (const signal of scopedSignals) {
+    const isFresh = signal.llmForecastGeneratedAtMs && Date.now() - signal.llmForecastGeneratedAtMs < 15 * 60 * 1000;
+    if (signal.llmInterpretation && signal.llmForecastSummary && isFresh) continue;
+
+    try {
+      const response = await invokeLLM({
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是一名严谨的盘中交易策略助理。请基于给定信号，为仪表板生成结构化中文输出，必须简洁、可执行、避免收益承诺。forecast_slope 使用 -1 到 1 之间的小数，正数代表偏多上行，负数代表偏空下行。forecast_confidence 使用 55 到 98 的整数。",
+          },
+          {
+            role: "user",
+            content: `请为以下信号生成预测与策略摘要：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n风险等级：${signal.riskLevel}\n执行前提：${signal.executionPrerequisite}\n方向：${signal.direction}\n触发动作：${signal.triggerAction}\n触发价位：${signal.triggerPrice}\n止损价位：${signal.stopLossPrice ?? signal.stopLoss}\n失效条件：${signal.invalidationCondition}\n当前价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}\n策略学习状态：${signal.learningStatus}\n历史收益：${signal.realizedReturnPct ?? "暂无"}%\n不利波动：${signal.adverseMovePct ?? "暂无"}%`,
+          },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "dashboard_signal_forecast",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                interpretation: { type: "string" },
+                forecast_summary: { type: "string" },
+                forecast_bias: { type: "string" },
+                forecast_slope: { type: "number" },
+                forecast_confidence: { type: "integer" },
+              },
+              required: ["interpretation", "forecast_summary", "forecast_bias", "forecast_slope", "forecast_confidence"],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+
+      const content = typeof response.choices[0]?.message.content === "string"
+        ? response.choices[0].message.content
+        : JSON.stringify(fallbackForecastInsight(signal));
+      const parsed = JSON.parse(content) as {
+        interpretation: string;
+        forecast_summary: string;
+        forecast_bias: string;
+        forecast_slope: number;
+        forecast_confidence: number;
+      };
+
+      updateSignalForecastInsight(userId, signal.id, {
+        interpretation: parsed.interpretation,
+        forecastSummary: parsed.forecast_summary,
+        forecastBias: parsed.forecast_bias,
+        forecastSlope: parsed.forecast_slope,
+        forecastConfidence: parsed.forecast_confidence,
+      });
+    } catch (error) {
+      const fallback = fallbackForecastInsight(signal);
+      updateSignalForecastInsight(userId, signal.id, fallback);
+    }
+  }
+}
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -82,6 +161,7 @@ export const appRouter = router({
   dashboard: router({
     overview: protectedProcedure.query(async ({ ctx }) => {
       await ensureHighScoreNotifications(ctx.user.id);
+      await ensureDashboardForecastInsights(ctx.user.id);
       return summarizeDashboard(ctx.user.id);
     }),
   }),
@@ -121,7 +201,7 @@ export const appRouter = router({
   signals: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       await ensureHighScoreNotifications(ctx.user.id);
-      return listSignals(ctx.user.id).map(signal => ({
+      return listScopedSignals(ctx.user.id).map(signal => ({
         ...signal,
         suggestion: createStructuredSuggestion({
           signalType: signal.signalType,
