@@ -82,6 +82,27 @@ describe("trading signal monitoring system", () => {
   });
 
   it("returns dashboard overview and triggers owner notification for high-score signals", async () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.12,
+          volume: 12880000,
+          turnover: 428000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
     const { appRouter } = await import("./routers");
     const caller = appRouter.createCaller(createAuthContext());
 
@@ -93,6 +114,39 @@ describe("trading signal monitoring system", () => {
   });
 
   it("returns structured trading suggestions with required field names", async () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "03690",
+          name: "美团-W",
+          lastPrice: 121.2,
+          volume: 19800000,
+          turnover: 2520000000,
+          openPrice: 118.8,
+          highPrice: 121.5,
+          lowPrice: 118.1,
+          prevClosePrice: 117.1,
+        },
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.12,
+          volume: 12880000,
+          turnover: 428000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
     const { appRouter } = await import("./routers");
     const caller = appRouter.createCaller(createAuthContext());
 
@@ -361,7 +415,7 @@ describe("trading signal monitoring system", () => {
       securityLabel: "03690 · 美团-W",
       identityKey: "HK:03690",
     });
-    expect(overview.latestSignals.find(signal => signal.symbol === "09992")).toMatchObject({
+    expect(overview.liveBoard.find(item => item.symbol === "09992")).toMatchObject({
       name: "泡泡玛特",
       securityLabel: "09992 · 泡泡玛特",
       identityKey: "HK:09992",
@@ -375,6 +429,41 @@ describe("trading signal monitoring system", () => {
       successRate: expect.any(Number),
       adaptiveWeight: expect.any(Number),
     });
+  });
+
+  it("suppresses stale trigger levels when latest price has moved far away from old buy signals", () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "03690",
+          name: "美团-W",
+          lastPrice: 85.2,
+          volume: 26400000,
+          turnover: 2210000000,
+          openPrice: 86.4,
+          highPrice: 86.8,
+          lowPrice: 84.9,
+          prevClosePrice: 87.3,
+        },
+      ],
+    });
+
+    const overview = summarizeDashboard(1);
+    const meituanBoard = overview.liveBoard.find(item => item.symbol === "03690");
+    const meituanSignal = overview.latestSignals.find(signal => signal.symbol === "03690");
+    const storedMeituanSignals = listSignals(1).filter(signal => signal.symbol === "03690");
+
+    expect(meituanBoard?.lastPrice).toBe(85.2);
+    expect(meituanBoard?.suggestionTriggerPrice).toBeNull();
+    expect(meituanSignal).toBeUndefined();
+    expect(meituanBoard?.failureReason).toContain("旧建议自动失效");
+    expect(storedMeituanSignals.some(signal => signal.learningStatus === "已验证失效" && (signal.failureReason ?? "").includes("旧建议自动失效"))).toBe(true);
+    expect(meituanBoard?.securityLabel).toBe("03690 · 美团-W");
   });
 
   it("tests bridge connectivity using recent heartbeat and quote status", async () => {

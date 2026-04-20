@@ -28,6 +28,7 @@ const LIVE_STALE_MS = 20_000;
 const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000;
 const PRICE_HISTORY_LIMIT = 90;
 const FORECAST_POINT_COUNT = 6;
+const MAX_ACTIONABLE_DEVIATION_PCT = 6;
 
 type LiveQuoteInput = {
   market: Market;
@@ -242,14 +243,68 @@ function scopedSignalFilter(userId: number, signals: SignalRecord[]) {
   return signals.filter(signal => scopedKeys.has(symbolKey(signal.market, signal.symbol)));
 }
 
+function hasFreshLiveQuote(settings: SettingsRecord) {
+  return !!settings.liveBridge.useLiveQuotes
+    && !!settings.liveBridge.lastQuoteAt
+    && Date.now() - settings.liveBridge.lastQuoteAt <= LIVE_STALE_MS;
+}
+
+function resolveSignalSuppressionReason(signal: SignalRecord, latestPrice: number | null, settings: SettingsRecord) {
+  if (signal.sourceMode === "live" && !hasFreshLiveQuote(settings)) {
+    return "实时行情已陈旧，旧信号已自动降级为仅供复盘参考。";
+  }
+  if (signal.sourceMode === "live" && Date.now() - signal.createdAtMs > LIVE_STALE_MS * 2) {
+    return "信号生成时间过旧，已失去实时执行价值。";
+  }
+  if (latestPrice && signal.triggerPrice) {
+    const deviationPct = Math.abs(latestPrice - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001) * 100;
+    if (deviationPct >= MAX_ACTIONABLE_DEVIATION_PCT) {
+      return `当前价格 ${round(latestPrice)} 已偏离原触发价 ${round(signal.triggerPrice)} 超过 ${MAX_ACTIONABLE_DEVIATION_PCT}% ，旧建议自动失效。`;
+    }
+
+    if (signal.stopLossPrice !== null) {
+      if (signal.direction === "做多" && latestPrice <= signal.stopLossPrice) {
+        return `当前价格 ${round(latestPrice)} 已跌破止损价 ${round(signal.stopLossPrice)}，做多建议自动失效。`;
+      }
+      if (signal.direction === "做空" && latestPrice >= signal.stopLossPrice) {
+        return `当前价格 ${round(latestPrice)} 已重新站上止损价 ${round(signal.stopLossPrice)}，做空建议自动失效。`;
+      }
+    }
+  }
+
+  if (signal.sourceMode === "demo") {
+    return settings.liveBridge.useLiveQuotes
+      ? "实时模式已开启，演示信号不再作为可执行指令展示。"
+      : "当前仍为演示行情，演示信号仅用于界面占位，不作为实盘执行建议。";
+  }
+
+  return null;
+}
+
+function invalidateSignal(signal: SignalRecord, reason: string) {
+  signal.learningStatus = "已验证失效";
+  signal.failureReason = reason;
+  signal.reviewedAtMs = Date.now();
+  signal.direction = "观察";
+  signal.triggerAction = "观察提醒";
+}
+
 function signalPriorityValue(signal: SignalRecord) {
   return (signal.sourceMode === "live" ? 10_000_000 : 0) + signal.createdAtMs + signal.score * 10;
 }
 
 function listDisplaySignals(userId: number): SignalRecord[] {
+  const settings = getSettings(userId);
+  const watchlistMap = new Map(scopedWatchlist(userId).map(item => [symbolKey(item.market, item.symbol), item]));
   const unique = new Map<string, SignalRecord>();
   for (const signal of scopedSignalFilter(userId, listSignals(userId))) {
     const key = symbolKey(signal.market, signal.symbol);
+    const latestPrice = watchlistMap.get(key)?.lastPrice ?? signal.quotePrice ?? null;
+    const suppressionReason = resolveSignalSuppressionReason(signal, latestPrice, settings);
+    if (suppressionReason) {
+      invalidateSignal(signal, suppressionReason);
+      continue;
+    }
     const current = unique.get(key);
     if (!current || signalPriorityValue(signal) > signalPriorityValue(current)) {
       unique.set(key, signal);
@@ -954,6 +1009,7 @@ export function summarizeDashboard(userId: number) {
   const liveBoard = watchlist.slice(0, 8).map(item => {
     const activeSignal = displaySignals.find(signal => signal.symbol === item.symbol && signal.market === item.market) ?? null;
     const signalFamily = signals.filter(signal => signal.symbol === item.symbol && signal.market === item.market);
+    const latestInvalidatedSignal = signalFamily.find(signal => signal.learningStatus === "已验证失效") ?? null;
     const learning = summarizeSignalLearning(signalFamily);
     const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
     const chart = buildForecastCurve(item, history, activeSignal);
@@ -985,9 +1041,9 @@ export function summarizeDashboard(userId: number) {
         averageAdversePct: learning.averageAdversePct,
         adaptiveWeight: learning.adaptiveWeight,
       },
-      executionPrerequisite: activeSignal?.executionPrerequisite ?? "等待价格与成交量同时确认。",
-      riskLevel: activeSignal?.riskLevel ?? "中",
-      failureReason: activeSignal?.failureReason ?? null,
+      executionPrerequisite: activeSignal?.executionPrerequisite ?? (latestInvalidatedSignal ? "旧建议已失效，等待新的价格结构与量能确认后再生成实时指令。" : "等待价格与成交量同时确认。"),
+      riskLevel: activeSignal?.riskLevel ?? (latestInvalidatedSignal ? "高" : "中"),
+      failureReason: activeSignal?.failureReason ?? latestInvalidatedSignal?.failureReason ?? null,
       llmStrategyNote: activeSignal?.llmInterpretation ?? `${item.symbol} 当前以${trendBias}策略为主，系统会结合最近信号命中率与回撤表现动态修正后续评分和提醒强度。`,
       llmForecastSummary: activeSignal?.llmForecastSummary ?? `${item.symbol} 预计短线维持${trendBias}节奏，但仍需结合触发位与止损位执行。`,
       llmForecastBias: activeSignal?.llmForecastBias ?? trendBias,
