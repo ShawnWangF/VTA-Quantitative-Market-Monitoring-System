@@ -3,11 +3,13 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import {
-  AlertLevel,
-  Direction,
-  getWorkspace,
-  Market,
+  type AlertLevel,
   type AlertRecord,
+  type Direction,
+  getWorkspace,
+  type Market,
+  type QuoteSourceMode,
+  type ReviewRecord,
   type ScanRecord,
   type SettingsRecord,
   type SignalRecord,
@@ -18,6 +20,33 @@ import {
 } from "./mockData";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+
+const PRODUCT_NAME = "Shawn Wang 量化盯盘系统";
+const LIVE_STALE_MS = 20_000;
+const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000;
+
+type LiveQuoteInput = {
+  market: Market;
+  symbol: string;
+  name?: string;
+  lastPrice: number;
+  volume: number;
+  turnover: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  prevClosePrice: number;
+};
+
+type LiveBridgeIngestInput = {
+  opendHost: string;
+  opendPort: number;
+  trackedSymbols?: string[];
+  publishIntervalSeconds?: number;
+  bridgeTimestampMs?: number;
+  error?: string | null;
+  quotes: LiveQuoteInput[];
+};
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
@@ -101,12 +130,286 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+function round(value: number, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSymbol(market: Market, raw: string) {
+  if (market === "HK") {
+    const cleaned = raw.replace(/^HK\./i, "").replace(/[^0-9]/g, "");
+    return cleaned.padStart(5, "0");
+  }
+  return raw.replace(/^US\./i, "").trim().toUpperCase();
+}
+
+function normalizeTrackedSymbols(market: Market, rawSymbols: string[]) {
+  return Array.from(new Set(rawSymbols.map(symbol => normalizeSymbol(market, symbol)).filter(Boolean)));
+}
+
+function resolveBridgeStatus(settings: SettingsRecord["liveBridge"]) {
+  if (settings.lastError) return "异常" as const;
+  if (!settings.useLiveQuotes || !settings.lastBridgeHeartbeatAt) return "未连接" as const;
+  if (Date.now() - settings.lastBridgeHeartbeatAt > LIVE_STALE_MS) return "陈旧" as const;
+  return "已连接" as const;
+}
+
+function directionForSignalType(signalType: SignalType): Direction {
+  return signalType === "冲高衰竭" ? "观察" : "做多";
+}
+
+function deriveSignalAlertLevel(score: number, preferred: AlertLevel): AlertLevel {
+  if (score >= 88) return "CRITICAL";
+  if (score >= 75) return preferred === "INFO" ? "WARNING" : preferred;
+  return preferred;
+}
+
+export function createStructuredSuggestion(input: {
+  signalType: SignalType;
+  direction: Direction;
+  entryRange: string;
+  stopLoss: string;
+  rationale: string;
+}) {
+  return {
+    方向: input.direction,
+    参考入场区间: input.entryRange,
+    止损参考: input.stopLoss,
+    理由说明: input.rationale,
+    signalType: input.signalType,
+  };
+}
+
+function sensitivityAdjustment(sensitivity: SignalSensitivity) {
+  if (sensitivity === "激进") return 6;
+  if (sensitivity === "保守") return -6;
+  return 0;
+}
+
+function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord) {
+  const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
+  const pullbackFromHighPct = quote.highPrice > 0 ? ((quote.highPrice - quote.lastPrice) / quote.highPrice) * 100 : 0;
+  const fromOpenPct = quote.openPrice > 0 ? ((quote.lastPrice - quote.openPrice) / quote.openPrice) * 100 : 0;
+  const sensitivityScore = sensitivityAdjustment(settings.signalSensitivity);
+  const turnoverFactor = quote.turnover / Math.max(settings.scanThresholds.minTurnover, 1);
+  const volumeScore = clamp(turnoverFactor * 10, 0, 12);
+  const baseReason = `${quote.symbol} 最新价 ${round(quote.lastPrice)}，涨跌幅 ${round(changePct)}%，成交额 ${Math.round(quote.turnover).toLocaleString()}。`;
+
+  if (changePct >= 2.2 && fromOpenPct >= 1.2 && pullbackFromHighPct <= 0.6) {
+    const score = clamp(Math.round(78 + changePct * 3 + volumeScore + sensitivityScore), 65, 98);
+    return {
+      signalType: "突破啟動" as const,
+      score,
+      triggerReason: `${baseReason}价格贴近当日高点且量价共振，符合突破啟動结构。`,
+      riskTags: ["追价滑点", "高位波动"],
+      entryRange: `${round(quote.lastPrice * 0.997)} - ${round(quote.highPrice)}`,
+      stopLoss: `跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))} 需降低仓位`,
+      rationale: "当前属于顺势启动型结构，更适合等待微幅回撤后的跟进，而不是无保护追高。",
+    };
+  }
+
+  if (changePct >= 0.8 && fromOpenPct > 0 && pullbackFromHighPct > 0.6 && pullbackFromHighPct <= 1.8) {
+    const score = clamp(Math.round(72 + changePct * 2.6 + volumeScore + sensitivityScore), 60, 95);
+    return {
+      signalType: "回踩續強" as const,
+      score,
+      triggerReason: `${baseReason}冲高后并未深度破坏结构，回踩仍保持在强势区，符合回踩續強特征。`,
+      riskTags: ["二次确认失败", "午后回落"],
+      entryRange: `${round(Math.max(quote.openPrice, quote.lastPrice * 0.993))} - ${round(quote.lastPrice)}`,
+      stopLoss: `失守 ${round(quote.openPrice * 0.995)} 需谨慎`,
+      rationale: "适合把回踩后的承接强度作为入场依据，若成交继续扩张，延续概率会提高。",
+    };
+  }
+
+  if (Math.abs(changePct) <= 1.2 && turnoverFactor >= 1.15 && quote.volume >= 1_500_000) {
+    const score = clamp(Math.round(68 + volumeScore + sensitivityScore), 58, 90);
+    return {
+      signalType: "盤口失衡" as const,
+      score,
+      triggerReason: `${baseReason}价格波动有限但成交明显抬升，说明短线买卖力量正在重新分配。`,
+      riskTags: ["需要盘口确认", "假突破风险"],
+      entryRange: `${round(quote.lowPrice * 1.002)} - ${round(quote.lastPrice)}`,
+      stopLoss: `若跌回 ${round(quote.lowPrice)} 下方则取消观察`,
+      rationale: "该信号更适合作为预警，不宜单独执行，最好与更深的逐笔或盘口信息一起确认。",
+    };
+  }
+
+  if (changePct >= 1.6 && pullbackFromHighPct >= 1.1 && quote.lastPrice < quote.highPrice * 0.989) {
+    const score = clamp(Math.round(70 + changePct * 2.3 + sensitivityScore), 60, 92);
+    return {
+      signalType: "冲高衰竭" as const,
+      score,
+      triggerReason: `${baseReason}价格从高位回落幅度扩大，冲高后的跟随资金不足，出现冲高衰竭迹象。`,
+      riskTags: ["高位回落", "承接减弱"],
+      entryRange: `${round(quote.lastPrice * 0.995)} - ${round(quote.lastPrice * 1.002)}`,
+      stopLoss: `重新站回 ${round(quote.highPrice * 0.997)} 上方则撤销衰竭判断`,
+      rationale: "这类结构更偏向节奏警示，应优先控制追高冲动，等待新的支撑确认。",
+    };
+  }
+
+  return null;
+}
+
+function buildSignalRecord(userId: number, quote: LiveQuoteInput, settings: SettingsRecord): SignalRecord | null {
+  const blueprint = buildSignalBlueprint(quote, settings);
+  if (!blueprint) return null;
+  const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
+  return {
+    id: 0,
+    userId,
+    market: quote.market,
+    symbol: normalizeSymbol(quote.market, quote.symbol),
+    signalType: blueprint.signalType,
+    score: blueprint.score,
+    triggerReason: blueprint.triggerReason,
+    riskTags: blueprint.riskTags,
+    direction: directionForSignalType(blueprint.signalType),
+    entryRange: blueprint.entryRange,
+    stopLoss: blueprint.stopLoss,
+    rationale: blueprint.rationale,
+    llmInterpretation: null,
+    sourceMode: "live",
+    quotePrice: round(quote.lastPrice),
+    quoteChangePct: round(changePct),
+    quoteVolume: Math.round(quote.volume),
+    createdAtMs: Date.now(),
+  };
+}
+
+function upsertSignalFromQuote(userId: number, quote: LiveQuoteInput, settings: SettingsRecord) {
+  const workspace = getWorkspace(userId);
+  const candidate = buildSignalRecord(userId, quote, settings);
+  if (!candidate) return null;
+
+  const recent = workspace.signals.find(
+    signal =>
+      signal.market === candidate.market &&
+      signal.symbol === candidate.symbol &&
+      signal.signalType === candidate.signalType &&
+      Date.now() - signal.createdAtMs <= SIGNAL_COOLDOWN_MS
+  );
+
+  if (recent) {
+    recent.score = candidate.score;
+    recent.triggerReason = candidate.triggerReason;
+    recent.riskTags = candidate.riskTags;
+    recent.direction = candidate.direction;
+    recent.entryRange = candidate.entryRange;
+    recent.stopLoss = candidate.stopLoss;
+    recent.rationale = candidate.rationale;
+    recent.sourceMode = "live";
+    recent.quotePrice = candidate.quotePrice;
+    recent.quoteChangePct = candidate.quoteChangePct;
+    recent.quoteVolume = candidate.quoteVolume;
+    recent.createdAtMs = Date.now();
+    return recent;
+  }
+
+  candidate.id = workspace.nextIds.signal++;
+  workspace.signals.unshift(candidate);
+  workspace.signals = workspace.signals.slice(0, 60);
+  return candidate;
+}
+
+function ensureAlertForSignal(userId: number, signal: SignalRecord, settings: SettingsRecord) {
+  const workspace = getWorkspace(userId);
+  const level = deriveSignalAlertLevel(signal.score, settings.alertLevelPreference);
+  const title = `${signal.symbol} ${signal.signalType} · ${signal.score} 分`;
+  const message = `${signal.triggerReason} 建议方向：${signal.direction}，参考入场区间：${signal.entryRange}。`;
+
+  const duplicate = workspace.alerts.find(
+    alert =>
+      alert.symbol === signal.symbol &&
+      alert.signalType === signal.signalType &&
+      Date.now() - alert.createdAtMs <= SIGNAL_COOLDOWN_MS
+  );
+
+  if (duplicate) {
+    duplicate.level = level;
+    duplicate.title = title;
+    duplicate.message = message;
+    duplicate.sourceMode = signal.sourceMode;
+    duplicate.createdAtMs = Date.now();
+    return duplicate;
+  }
+
+  const alert: AlertRecord = {
+    id: workspace.nextIds.alert++,
+    userId,
+    signalId: signal.id,
+    market: signal.market,
+    symbol: signal.symbol,
+    signalType: signal.signalType,
+    level,
+    title,
+    message,
+    notifyTriggered: 0,
+    sourceMode: signal.sourceMode,
+    createdAtMs: Date.now(),
+  };
+
+  workspace.alerts.unshift(alert);
+  workspace.alerts = workspace.alerts.slice(0, 120);
+  return alert;
+}
+
+function upsertWatchlistQuote(userId: number, quote: LiveQuoteInput) {
+  const workspace = getWorkspace(userId);
+  const normalizedSymbol = normalizeSymbol(quote.market, quote.symbol);
+  const nowTs = Date.now();
+  const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
+
+  const existing = workspace.watchlistItems.find(item => item.market === quote.market && item.symbol === normalizedSymbol);
+  if (existing) {
+    existing.name = quote.name ?? existing.name;
+    existing.lastPrice = round(quote.lastPrice);
+    existing.changePct = round(changePct);
+    existing.volume = Math.round(quote.volume);
+    existing.turnover = Math.round(quote.turnover);
+    existing.openPrice = round(quote.openPrice);
+    existing.highPrice = round(quote.highPrice);
+    existing.lowPrice = round(quote.lowPrice);
+    existing.prevClosePrice = round(quote.prevClosePrice);
+    existing.sourceMode = "live";
+    existing.updatedAt = nowTs;
+    return existing;
+  }
+
+  const record: WatchlistRecord = {
+    id: workspace.nextIds.watchlist++,
+    userId,
+    market: quote.market,
+    symbol: normalizedSymbol,
+    name: quote.name ?? normalizedSymbol,
+    priority: 3,
+    lastPrice: round(quote.lastPrice),
+    changePct: round(changePct),
+    volume: Math.round(quote.volume),
+    turnover: Math.round(quote.turnover),
+    openPrice: round(quote.openPrice),
+    highPrice: round(quote.highPrice),
+    lowPrice: round(quote.lowPrice),
+    prevClosePrice: round(quote.prevClosePrice),
+    sourceMode: "live",
+    isActive: 1,
+    createdAt: nowTs,
+    updatedAt: nowTs,
+  };
+
+  workspace.watchlistItems.push(record);
+  return record;
+}
+
 export function getTradingWorkspace(userId: number): TradingWorkspace {
   return getWorkspace(userId);
 }
 
 export function listWatchlist(userId: number): WatchlistRecord[] {
-  return [...getWorkspace(userId).watchlistItems].sort((a, b) => b.priority - a.priority || a.symbol.localeCompare(b.symbol));
+  return [...getWorkspace(userId).watchlistItems].sort((a, b) => b.priority - a.priority || b.updatedAt - a.updatedAt || a.symbol.localeCompare(b.symbol));
 }
 
 export function addWatchlistItem(
@@ -114,8 +417,9 @@ export function addWatchlistItem(
   input: { market: Market; symbol: string; name: string; priority: number }
 ): WatchlistRecord {
   const workspace = getWorkspace(userId);
+  const normalizedSymbol = normalizeSymbol(input.market, input.symbol);
   const existing = workspace.watchlistItems.find(
-    item => item.market === input.market && item.symbol.toUpperCase() === input.symbol.toUpperCase()
+    item => item.market === input.market && item.symbol === normalizedSymbol
   );
 
   if (existing) {
@@ -129,12 +433,18 @@ export function addWatchlistItem(
     id: workspace.nextIds.watchlist++,
     userId,
     market: input.market,
-    symbol: input.symbol.toUpperCase(),
+    symbol: normalizedSymbol,
     name: input.name,
     priority: input.priority,
     lastPrice: 0,
     changePct: 0,
     volume: 0,
+    turnover: 0,
+    openPrice: 0,
+    highPrice: 0,
+    lowPrice: 0,
+    prevClosePrice: 0,
+    sourceMode: "demo",
     isActive: 1,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -201,6 +511,7 @@ export function createAlertFromSignal(
     title,
     message,
     notifyTriggered: 0,
+    sourceMode: signal.sourceMode,
     createdAtMs: Date.now(),
   };
   workspace.alerts.unshift(alert);
@@ -211,12 +522,19 @@ export function listScanResults(userId: number): ScanRecord[] {
   return [...getWorkspace(userId).scanResults].sort((a, b) => b.rankScore - a.rankScore);
 }
 
-export function getLatestReview(userId: number) {
+export function getLatestReview(userId: number): ReviewRecord {
   return getWorkspace(userId).reviewReport;
 }
 
 export function getSettings(userId: number): SettingsRecord {
-  return getWorkspace(userId).settings;
+  const settings = getWorkspace(userId).settings;
+  return {
+    ...settings,
+    liveBridge: {
+      ...settings.liveBridge,
+      connectionStatus: resolveBridgeStatus(settings.liveBridge),
+    },
+  };
 }
 
 export function saveSettings(
@@ -227,23 +545,96 @@ export function saveSettings(
     alertLevelPreference: AlertLevel;
     watchlistLimit: number;
     highScoreNotifyThreshold: number;
+    liveBridge: Pick<SettingsRecord["liveBridge"], "opendHost" | "opendPort" | "trackedSymbols" | "bridgeToken" | "publishIntervalSeconds" | "useLiveQuotes">;
   }
 ): SettingsRecord {
   const workspace = getWorkspace(userId);
   workspace.settings = {
     ...workspace.settings,
-    ...input,
+    scanThresholds: input.scanThresholds,
+    signalSensitivity: input.signalSensitivity,
+    alertLevelPreference: input.alertLevelPreference,
+    watchlistLimit: input.watchlistLimit,
+    highScoreNotifyThreshold: input.highScoreNotifyThreshold,
+    liveBridge: {
+      ...workspace.settings.liveBridge,
+      opendHost: input.liveBridge.opendHost,
+      opendPort: input.liveBridge.opendPort,
+      trackedSymbols: normalizeTrackedSymbols("HK", input.liveBridge.trackedSymbols),
+      bridgeToken: input.liveBridge.bridgeToken,
+      publishIntervalSeconds: input.liveBridge.publishIntervalSeconds,
+      useLiveQuotes: input.liveBridge.useLiveQuotes,
+      connectionStatus: resolveBridgeStatus(workspace.settings.liveBridge),
+    },
     updatedAt: Date.now(),
   };
-  return workspace.settings;
+  return getSettings(userId);
+}
+
+export function ingestLiveQuotes(userId: number, input: LiveBridgeIngestInput) {
+  const workspace = getWorkspace(userId);
+  const bridgeTimestamp = input.bridgeTimestampMs ?? Date.now();
+  const trackedSymbols = normalizeTrackedSymbols("HK", input.trackedSymbols ?? input.quotes.map(quote => quote.symbol));
+
+  workspace.settings.liveBridge = {
+    ...workspace.settings.liveBridge,
+    opendHost: input.opendHost,
+    opendPort: input.opendPort,
+    trackedSymbols,
+    publishIntervalSeconds: input.publishIntervalSeconds ?? workspace.settings.liveBridge.publishIntervalSeconds,
+    useLiveQuotes: true,
+    lastBridgeHeartbeatAt: bridgeTimestamp,
+    lastQuoteAt: input.quotes.length > 0 ? bridgeTimestamp : workspace.settings.liveBridge.lastQuoteAt,
+    lastError: input.error ?? null,
+    connectionStatus: input.error ? "异常" : "已连接",
+  };
+
+  const updatedSymbols: string[] = [];
+  const generatedSignals: SignalRecord[] = [];
+
+  for (const quote of input.quotes) {
+    const normalizedQuote: LiveQuoteInput = {
+      ...quote,
+      market: quote.market,
+      symbol: normalizeSymbol(quote.market, quote.symbol),
+      name: quote.name,
+      lastPrice: Number(quote.lastPrice),
+      volume: Number(quote.volume),
+      turnover: Number(quote.turnover),
+      openPrice: Number(quote.openPrice),
+      highPrice: Number(quote.highPrice),
+      lowPrice: Number(quote.lowPrice),
+      prevClosePrice: Number(quote.prevClosePrice),
+    };
+
+    upsertWatchlistQuote(userId, normalizedQuote);
+    updatedSymbols.push(normalizedQuote.symbol);
+    const signal = upsertSignalFromQuote(userId, normalizedQuote, workspace.settings);
+    if (signal) {
+      generatedSignals.push(signal);
+      ensureAlertForSignal(userId, signal, workspace.settings);
+    }
+  }
+
+  return {
+    ok: true,
+    productName: PRODUCT_NAME,
+    updatedSymbols: Array.from(new Set(updatedSymbols)),
+    generatedSignals: generatedSignals.map(signal => ({
+      symbol: signal.symbol,
+      signalType: signal.signalType,
+      score: signal.score,
+    })),
+    liveBridge: getSettings(userId).liveBridge,
+  };
 }
 
 export function getMarketStatus() {
   const nowDate = new Date();
   const utcHour = nowDate.getUTCHours();
   const utcMinute = nowDate.getUTCMinutes();
-  const usMinutes = (utcHour - 4 + 24) % 24 * 60 + utcMinute;
-  const hkMinutes = (utcHour + 8) % 24 * 60 + utcMinute;
+  const usMinutes = ((utcHour - 4 + 24) % 24) * 60 + utcMinute;
+  const hkMinutes = ((utcHour + 8) % 24) * 60 + utcMinute;
 
   const isUsRegular = usMinutes >= 9 * 60 + 30 && usMinutes <= 16 * 60;
   const isUsPre = usMinutes >= 4 * 60 && usMinutes < 9 * 60 + 30;
@@ -263,8 +654,6 @@ export function summarizeDashboard(userId: number) {
   const alerts = listAlerts(userId);
   const review = getLatestReview(userId);
   const settings = getSettings(userId);
-
-  const criticalSignals = signals.filter(signal => signal.score >= settings.highScoreNotifyThreshold);
   const latestSignals = signals.slice(0, 4);
   const alertStats = {
     total: alerts.length,
@@ -273,35 +662,30 @@ export function summarizeDashboard(userId: number) {
     info: alerts.filter(alert => alert.level === "INFO").length,
   };
 
+  const liveBoard = watchlist.slice(0, 8).map(item => {
+    const activeSignal = signals.find(signal => signal.symbol === item.symbol && signal.market === item.market);
+    return {
+      ...item,
+      activeSignalType: activeSignal?.signalType ?? null,
+      activeSignalScore: activeSignal?.score ?? null,
+      suggestionDirection: activeSignal?.direction ?? null,
+      suggestionEntryRange: activeSignal?.entryRange ?? null,
+      sourceMode: item.sourceMode,
+    };
+  });
+
   return {
-    productName: "Shawn Wang 量化盯盘系统",
+    productName: PRODUCT_NAME,
     marketStatus: getMarketStatus(),
     watchlist,
     latestSignals,
     alertStats,
     hitRate: review.hitRate,
-    highScoreCount: criticalSignals.length,
-  };
-}
-
-export function deriveSignalAlertLevel(score: number, preferred: AlertLevel): AlertLevel {
-  if (score >= 88) return "CRITICAL";
-  if (score >= 75) return preferred === "INFO" ? "WARNING" : preferred;
-  return preferred;
-}
-
-export function createStructuredSuggestion(input: {
-  signalType: SignalType;
-  direction: Direction;
-  entryRange: string;
-  stopLoss: string;
-  rationale: string;
-}) {
-  return {
-    方向: input.direction,
-    参考入场区间: input.entryRange,
-    止损参考: input.stopLoss,
-    理由说明: input.rationale,
-    signalType: input.signalType,
+    highScoreCount: signals.filter(signal => signal.score >= settings.highScoreNotifyThreshold).length,
+    liveBridge: {
+      ...settings.liveBridge,
+      sourceLabel: settings.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace",
+    },
+    liveBoard,
   };
 }

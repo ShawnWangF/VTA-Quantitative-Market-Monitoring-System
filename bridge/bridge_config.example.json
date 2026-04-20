@@ -1,0 +1,9 @@
+{
+  "ingest_url": "https://your-domain-or-preview/api/futu-bridge/ingest",
+  "bridge_token": "replace-with-bridge-token-from-settings-page",
+  "opend_host": "127.0.0.1",
+  "opend_port": 11111,
+  "tracked_symbols": ["03690", "09992"],
+  "publish_interval_seconds": 3,
+  "request_timeout_seconds": 10
+}

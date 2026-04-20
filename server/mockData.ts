@@ -3,6 +3,8 @@ export type SignalType = "突破啟動" | "回踩續強" | "盤口失衡" | "冲
 export type AlertLevel = "INFO" | "WARNING" | "CRITICAL";
 export type Direction = "做多" | "做空" | "观察";
 export type SignalSensitivity = "保守" | "标准" | "激进";
+export type BridgeConnectionStatus = "未连接" | "已连接" | "陈旧" | "异常";
+export type QuoteSourceMode = "demo" | "live";
 
 export type WatchlistRecord = {
   id: number;
@@ -14,6 +16,12 @@ export type WatchlistRecord = {
   lastPrice: number;
   changePct: number;
   volume: number;
+  turnover: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  prevClosePrice: number;
+  sourceMode: QuoteSourceMode;
   isActive: number;
   createdAt: number;
   updatedAt: number;
@@ -33,6 +41,10 @@ export type SignalRecord = {
   stopLoss: string;
   rationale: string;
   llmInterpretation: string | null;
+  sourceMode: QuoteSourceMode;
+  quotePrice: number;
+  quoteChangePct: number;
+  quoteVolume: number;
   createdAtMs: number;
 };
 
@@ -47,6 +59,7 @@ export type AlertRecord = {
   title: string;
   message: string;
   notifyTriggered: number;
+  sourceMode: QuoteSourceMode;
   createdAtMs: number;
 };
 
@@ -78,6 +91,20 @@ export type ReviewRecord = {
   };
 };
 
+export type LiveBridgeSettings = {
+  provider: "FUTU_LOCAL_OPEND";
+  opendHost: string;
+  opendPort: number;
+  trackedSymbols: string[];
+  bridgeToken: string;
+  publishIntervalSeconds: number;
+  useLiveQuotes: boolean;
+  connectionStatus: BridgeConnectionStatus;
+  lastBridgeHeartbeatAt: number | null;
+  lastQuoteAt: number | null;
+  lastError: string | null;
+};
+
 export type SettingsRecord = {
   id: number;
   userId: number;
@@ -90,6 +117,7 @@ export type SettingsRecord = {
   alertLevelPreference: AlertLevel;
   watchlistLimit: number;
   highScoreNotifyThreshold: number;
+  liveBridge: LiveBridgeSettings;
   updatedAt: number;
 };
 
@@ -115,18 +143,28 @@ const workspaceStore = new Map<number, TradingWorkspace>();
 const now = Date.now();
 const today = new Date(now).toISOString().slice(0, 10);
 
+function defaultBridgeToken(userId: number) {
+  return `sw-bridge-${userId}-3690-9992-live`;
+}
+
 function seededWatchlist(userId: number): WatchlistRecord[] {
   return [
     {
       id: 1,
       userId,
-      market: "US",
-      symbol: "NVDA",
-      name: "NVIDIA",
+      market: "HK",
+      symbol: "03690",
+      name: "美团-W",
       priority: 5,
-      lastPrice: 961.24,
-      changePct: 3.48,
-      volume: 38420000,
+      lastPrice: 117.8,
+      changePct: 1.46,
+      volume: 18243000,
+      turnover: 2130000000,
+      openPrice: 116.2,
+      highPrice: 118.4,
+      lowPrice: 115.9,
+      prevClosePrice: 116.1,
+      sourceMode: "demo",
       isActive: 1,
       createdAt: now,
       updatedAt: now,
@@ -134,41 +172,19 @@ function seededWatchlist(userId: number): WatchlistRecord[] {
     {
       id: 2,
       userId,
-      market: "US",
-      symbol: "TSLA",
-      name: "Tesla",
-      priority: 4,
-      lastPrice: 212.84,
-      changePct: 2.11,
-      volume: 55120000,
-      isActive: 1,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 3,
-      userId,
       market: "HK",
-      symbol: "00700",
-      name: "腾讯控股",
+      symbol: "09992",
+      name: "泡泡玛特",
       priority: 5,
-      lastPrice: 326.4,
-      changePct: 1.62,
-      volume: 16230000,
-      isActive: 1,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 4,
-      userId,
-      market: "HK",
-      symbol: "09988",
-      name: "阿里巴巴-SW",
-      priority: 3,
-      lastPrice: 78.1,
-      changePct: -0.62,
-      volume: 28420000,
+      lastPrice: 36.92,
+      changePct: 3.12,
+      volume: 10682000,
+      turnover: 392000000,
+      openPrice: 35.68,
+      highPrice: 37.18,
+      lowPrice: 35.54,
+      prevClosePrice: 35.8,
+      sourceMode: "demo",
       isActive: 1,
       createdAt: now,
       updatedAt: now,
@@ -181,66 +197,42 @@ function seededSignals(userId: number): SignalRecord[] {
     {
       id: 1,
       userId,
-      market: "US",
-      symbol: "NVDA",
+      market: "HK",
+      symbol: "09992",
       signalType: "突破啟動",
-      score: 91,
-      triggerReason: "盘前强势高开后，1 分钟结构突破前高，量比与主动买盘同步抬升。",
-      riskTags: ["追高波动", "开盘滑点"],
+      score: 90,
+      triggerReason: "泡泡玛特早盘跳空后持续放量，价格贴近当日高点，趋势启动结构清晰。",
+      riskTags: ["高位波动", "追价滑点"],
       direction: "做多",
-      entryRange: "958.0 - 964.5",
-      stopLoss: "跌破 951.0 关注撤退",
-      rationale: "价格强势突破关键阻力，同时量能与盘口承接共振，属于高质量趋势启动结构。",
+      entryRange: "36.60 - 37.05",
+      stopLoss: "跌破 35.95 需降低仓位",
+      rationale: "价格与成交额同步提升，属于高景气题材下的动量延续结构。",
       llmInterpretation: null,
-      createdAtMs: now - 3 * 60 * 1000,
+      sourceMode: "demo",
+      quotePrice: 36.92,
+      quoteChangePct: 3.12,
+      quoteVolume: 10682000,
+      createdAtMs: now - 4 * 60 * 1000,
     },
     {
       id: 2,
       userId,
       market: "HK",
-      symbol: "00700",
+      symbol: "03690",
       signalType: "回踩續強",
-      score: 84,
-      triggerReason: "早盘突破后回踩 VWAP 获得承接，再次放量站回前高。",
-      riskTags: ["假突破回落"],
+      score: 82,
+      triggerReason: "美团早盘上冲后回踩开盘中轴企稳，重新站回短线强势区。",
+      riskTags: ["午后回落", "二次确认失败"],
       direction: "做多",
-      entryRange: "324.8 - 327.0",
-      stopLoss: "失守 322.6 关注风险",
-      rationale: "回踩不破关键均价区，说明资金承接仍在，二次上攻具有延续概率。",
+      entryRange: "117.10 - 117.85",
+      stopLoss: "失守 116.35 需谨慎",
+      rationale: "回踩后的承接仍在，若再度放量，具备继续向上试高的条件。",
       llmInterpretation: null,
-      createdAtMs: now - 12 * 60 * 1000,
-    },
-    {
-      id: 3,
-      userId,
-      market: "US",
-      symbol: "TSLA",
-      signalType: "盤口失衡",
-      score: 78,
-      triggerReason: "买盘挂单密度显著高于卖盘，盘口连续两轮出现承接强化。",
-      riskTags: ["盘口诱导"],
-      direction: "观察",
-      entryRange: "211.5 - 213.0",
-      stopLoss: "跌破 209.8 需谨慎",
-      rationale: "盘口优势明确，但仍需观察逐笔成交是否继续确认。",
-      llmInterpretation: null,
-      createdAtMs: now - 18 * 60 * 1000,
-    },
-    {
-      id: 4,
-      userId,
-      market: "HK",
-      symbol: "09988",
-      signalType: "冲高衰竭",
-      score: 73,
-      triggerReason: "冲高新高后主动买盘减弱，上影线拉长，盘口回补速度加快。",
-      riskTags: ["趋势反抽", "午后回落"],
-      direction: "做空",
-      entryRange: "77.8 - 78.4",
-      stopLoss: "重新站上 79.2 应停止逆势观察",
-      rationale: "冲高后的动能衰退较为明显，若未能快速修复，短线易进入回落结构。",
-      llmInterpretation: null,
-      createdAtMs: now - 27 * 60 * 1000,
+      sourceMode: "demo",
+      quotePrice: 117.8,
+      quoteChangePct: 1.46,
+      quoteVolume: 18243000,
+      createdAtMs: now - 11 * 60 * 1000,
     },
   ];
 }
@@ -251,40 +243,29 @@ function seededAlerts(userId: number): AlertRecord[] {
       id: 1,
       userId,
       signalId: 1,
-      market: "US",
-      symbol: "NVDA",
+      market: "HK",
+      symbol: "09992",
       signalType: "突破啟動",
       level: "CRITICAL",
-      title: "高评分突破啟動",
-      message: "NVDA 出现高评分突破啟動，符合趋势型抢先观察条件。",
+      title: "泡泡玛特高评分突破啟動",
+      message: "09992 量价同步增强，已经进入高优先级观察区。",
       notifyTriggered: 0,
-      createdAtMs: now - 3 * 60 * 1000,
+      sourceMode: "demo",
+      createdAtMs: now - 4 * 60 * 1000,
     },
     {
       id: 2,
       userId,
       signalId: 2,
       market: "HK",
-      symbol: "00700",
+      symbol: "03690",
       signalType: "回踩續強",
       level: "WARNING",
-      title: "回踩續強确认",
-      message: "00700 在关键均价区获得承接，回踩续强结构成立。",
+      title: "美团回踩續強确认",
+      message: "03690 在关键回踩位出现承接，属于可继续跟踪的延续结构。",
       notifyTriggered: 0,
-      createdAtMs: now - 12 * 60 * 1000,
-    },
-    {
-      id: 3,
-      userId,
-      signalId: 3,
-      market: "US",
-      symbol: "TSLA",
-      signalType: "盤口失衡",
-      level: "INFO",
-      title: "盘口失衡观察",
-      message: "TSLA 盘口买卖差扩大，但尚需成交确认。",
-      notifyTriggered: 0,
-      createdAtMs: now - 18 * 60 * 1000,
+      sourceMode: "demo",
+      createdAtMs: now - 11 * 60 * 1000,
     },
   ];
 }
@@ -294,27 +275,27 @@ function seededScans(userId: number): ScanRecord[] {
     {
       id: 1,
       userId,
-      market: "US",
-      symbol: "SMCI",
-      name: "Super Micro Computer",
-      volumeRatio: 3.8,
-      turnover: 462000000,
-      premarketChangePct: 6.7,
-      rankScore: 93,
-      notes: "盘前活跃度与成交额均位于样本前列，适合作为高优先级候选。",
+      market: "HK",
+      symbol: "09992",
+      name: "泡泡玛特",
+      volumeRatio: 2.9,
+      turnover: 392000000,
+      premarketChangePct: 3.1,
+      rankScore: 92,
+      notes: "高弹性消费股中最具趋势延续性的样本，适合列入一级观察池。",
       scanDate: today,
     },
     {
       id: 2,
       userId,
-      market: "US",
-      symbol: "AMD",
-      name: "AMD",
-      volumeRatio: 2.9,
-      turnover: 287000000,
-      premarketChangePct: 4.2,
+      market: "HK",
+      symbol: "03690",
+      name: "美团-W",
+      volumeRatio: 2.4,
+      turnover: 2130000000,
+      premarketChangePct: 1.4,
       rankScore: 85,
-      notes: "量比与跳空幅度较好，但仍需确认开盘承接强度。",
+      notes: "成交额优势显著，适合作为港股大盘风格的核心锚点标的。",
       scanDate: today,
     },
     {
@@ -323,11 +304,11 @@ function seededScans(userId: number): ScanRecord[] {
       market: "HK",
       symbol: "01810",
       name: "小米集团-W",
-      volumeRatio: 2.5,
-      turnover: 194000000,
-      premarketChangePct: 3.1,
-      rankScore: 79,
-      notes: "港股盘前热度明显提升，适合作为次级观察对象。",
+      volumeRatio: 2.1,
+      turnover: 586000000,
+      premarketChangePct: 2.2,
+      rankScore: 78,
+      notes: "具备跟随补涨潜力，但当前优先级低于美团与泡泡玛特。",
       scanDate: today,
     },
   ];
@@ -339,17 +320,17 @@ function seededReview(userId: number): ReviewRecord {
     userId,
     reviewDate: today,
     hitRate: 68,
-    falsePositiveAnalysis: "误报主要集中在午后流动性下降阶段，部分盘口失衡信号缺少逐笔成交确认，导致延续性不足。",
-    bestSignal: "突破啟動：高分样本在量比和盘口承接同步增强时表现最佳。",
-    worstSignal: "盤口失衡：若没有后续主动买盘配合，单独观察盘口容易出现诱导。",
+    falsePositiveAnalysis: "误报主要集中在午后流动性回落阶段，部分结构虽然价格维持强势，但成交额没有继续扩张，导致延续性不足。",
+    bestSignal: "突破啟動：在港股高热度主题里，量价共振最强的样本表现最佳。",
+    worstSignal: "盤口失衡：若只有报价变化而缺乏更深盘口确认，可靠性会明显下降。",
     meta: {
       accuracyBySignal: [
-        { signalType: "突破啟動", hitRate: 79, occurrences: 14 },
-        { signalType: "回踩續強", hitRate: 72, occurrences: 11 },
-        { signalType: "盤口失衡", hitRate: 54, occurrences: 17 },
-        { signalType: "冲高衰竭", hitRate: 66, occurrences: 9 },
+        { signalType: "突破啟動", hitRate: 78, occurrences: 13 },
+        { signalType: "回踩續強", hitRate: 71, occurrences: 12 },
+        { signalType: "盤口失衡", hitRate: 55, occurrences: 16 },
+        { signalType: "冲高衰竭", hitRate: 63, occurrences: 10 },
       ],
-      commentary: "高质量趋势信号优于单纯盘口结构信号，后续可加强逐笔确认与时段过滤。",
+      commentary: "港股短线环境中，量价同步强于单纯报价异动；后续若叠加逐笔与盘口数据，盘口失衡信号的可靠性还可以继续提升。",
     },
   };
 }
@@ -361,12 +342,25 @@ function seededSettings(userId: number): SettingsRecord {
     scanThresholds: {
       minVolumeRatio: 2.2,
       minTurnover: 120000000,
-      minPremarketChangePct: 2.8,
+      minPremarketChangePct: 2.0,
     },
     signalSensitivity: "标准",
     alertLevelPreference: "WARNING",
     watchlistLimit: 30,
     highScoreNotifyThreshold: 88,
+    liveBridge: {
+      provider: "FUTU_LOCAL_OPEND",
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      bridgeToken: defaultBridgeToken(userId),
+      publishIntervalSeconds: 3,
+      useLiveQuotes: false,
+      connectionStatus: "未连接",
+      lastBridgeHeartbeatAt: null,
+      lastQuoteAt: null,
+      lastError: null,
+    },
     updatedAt: now,
   };
 }
@@ -380,9 +374,9 @@ function createSeedWorkspace(userId: number): TradingWorkspace {
     reviewReport: seededReview(userId),
     settings: seededSettings(userId),
     nextIds: {
-      watchlist: 5,
-      signal: 5,
-      alert: 4,
+      watchlist: 3,
+      signal: 3,
+      alert: 3,
       scan: 4,
       review: 2,
       settings: 2,

@@ -8,7 +8,6 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   addWatchlistItem,
   createStructuredSuggestion,
-  deriveSignalAlertLevel,
   getLatestReview,
   getSettings,
   listAlerts,
@@ -31,9 +30,7 @@ const sensitivitySchema = z.enum(["保守", "标准", "激进"]);
 async function ensureHighScoreNotifications(userId: number) {
   const settings = getSettings(userId);
   const alerts = listAlerts(userId);
-  const pending = alerts.filter(
-    alert => alert.notifyTriggered === 0 && alert.level === "CRITICAL"
-  );
+  const pending = alerts.filter(alert => alert.notifyTriggered === 0 && alert.level === "CRITICAL");
 
   for (const alert of pending) {
     const signal = listSignals(userId).find(item => item.id === alert.signalId);
@@ -48,6 +45,7 @@ async function ensureHighScoreNotifications(userId: number) {
         `参考入场区间：${signal.entryRange}`,
         `止损参考：${signal.stopLoss}`,
         `理由说明：${signal.rationale}`,
+        `行情快照：价格 ${signal.quotePrice} / 涨跌幅 ${signal.quoteChangePct}% / 成交量 ${signal.quoteVolume}`,
       ].join("\n"),
     });
 
@@ -61,6 +59,7 @@ function fallbackInterpretation(signal: ReturnType<typeof listSignals>[number]) 
   return [
     `该信号属于“${signal.signalType}”，当前评分为 ${signal.score} 分，方向倾向为 ${signal.direction}。`,
     `从结构上看，触发原因主要是：${signal.triggerReason}`,
+    `实时行情快照显示价格 ${signal.quotePrice}、涨跌幅 ${signal.quoteChangePct}% 、成交量 ${signal.quoteVolume}。`,
     `交易计划上可优先关注 ${signal.entryRange} 区间，并以 ${signal.stopLoss} 作为风险参考。`,
     `需要特别注意的风险包括：${signal.riskTags.join("、") || "暂无"}。`,
   ].join("");
@@ -90,6 +89,7 @@ export const appRouter = router({
       return {
         items: listWatchlist(ctx.user.id),
         limit: settings.watchlistLimit,
+        liveBridge: settings.liveBridge,
       };
     }),
     add: protectedProcedure
@@ -148,7 +148,7 @@ export const appRouter = router({
               },
               {
                 role: "user",
-                content: `请解读以下信号：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n方向：${signal.direction}\n参考入场区间：${signal.entryRange}\n止损参考：${signal.stopLoss}\n理由说明：${signal.rationale}`,
+                content: `请解读以下信号：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n方向：${signal.direction}\n参考入场区间：${signal.entryRange}\n止损参考：${signal.stopLoss}\n理由说明：${signal.rationale}\n实时价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}`,
               },
             ],
           });
@@ -196,6 +196,37 @@ export const appRouter = router({
   }),
   settings: router({
     get: protectedProcedure.query(({ ctx }) => getSettings(ctx.user.id)),
+    testBridgeConnection: protectedProcedure.mutation(({ ctx }) => {
+      const settings = getSettings(ctx.user.id);
+      const liveBridge = settings.liveBridge;
+      const now = Date.now();
+      const stalenessThresholdMs = liveBridge.publishIntervalSeconds * 4000;
+      const recentHeartbeat = !!liveBridge.lastBridgeHeartbeatAt && now - liveBridge.lastBridgeHeartbeatAt <= stalenessThresholdMs;
+      const recentQuote = !!liveBridge.lastQuoteAt && now - liveBridge.lastQuoteAt <= stalenessThresholdMs;
+      const reachable = liveBridge.connectionStatus === "已连接" && recentHeartbeat;
+
+      return {
+        reachable,
+        connectionStatus: liveBridge.connectionStatus,
+        summary: reachable
+          ? `桥接已联通，最近一次心跳时间为 ${new Date(liveBridge.lastBridgeHeartbeatAt!).toLocaleString()}。`
+          : liveBridge.lastError
+            ? `桥接最近返回异常：${liveBridge.lastError}`
+            : "尚未收到本地桥接的最新心跳，请确认 Windows 侧桥接程序已经启动并成功推送。",
+        details: {
+          opendHost: liveBridge.opendHost,
+          opendPort: liveBridge.opendPort,
+          trackedSymbols: liveBridge.trackedSymbols,
+          publishIntervalSeconds: liveBridge.publishIntervalSeconds,
+          useLiveQuotes: liveBridge.useLiveQuotes,
+          lastBridgeHeartbeatAt: liveBridge.lastBridgeHeartbeatAt,
+          lastQuoteAt: liveBridge.lastQuoteAt,
+          recentHeartbeat,
+          recentQuote,
+          lastError: liveBridge.lastError,
+        },
+      };
+    }),
     save: protectedProcedure
       .input(
         z.object({
@@ -208,6 +239,14 @@ export const appRouter = router({
           alertLevelPreference: alertLevelSchema,
           watchlistLimit: z.number().int().min(1).max(500),
           highScoreNotifyThreshold: z.number().min(0).max(100),
+          liveBridge: z.object({
+            opendHost: z.string().min(1).max(128),
+            opendPort: z.number().int().min(1).max(65535),
+            trackedSymbols: z.array(z.string().min(1).max(32)).min(1),
+            bridgeToken: z.string().min(8).max(128),
+            publishIntervalSeconds: z.number().int().min(1).max(60),
+            useLiveQuotes: z.boolean(),
+          }),
         })
       )
       .mutation(({ ctx, input }) => saveSettings(ctx.user.id, input)),
