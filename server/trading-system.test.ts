@@ -94,6 +94,38 @@ describe("trading signal monitoring system", () => {
     expect(settings.liveBridge.useLiveQuotes).toBe(true);
   });
 
+  it("keeps dashboard and related pages in real-data empty state before bridge quotes arrive", async () => {
+    const { appRouter } = await import("./routers");
+    const caller = appRouter.createCaller(createAuthContext());
+
+    const [overview, signals, alerts, scans, review, settings] = await Promise.all([
+      caller.dashboard.overview(),
+      caller.signals.list(),
+      caller.alerts.list(),
+      caller.scans.list(),
+      caller.review.latest(),
+      caller.settings.get(),
+    ]);
+
+    expect(overview.liveBridge.connectionStatus).toBe("未连接");
+    expect(overview.liveBridge.sourceState).toBe("awaiting_bridge");
+    expect(overview.liveBridge.sourceLabel).toBe("Real Data Required · Awaiting Bridge");
+    expect(overview.liveBridge.sourceDetail).toContain("不会回退到示例数据");
+    expect(overview.liveBoard).toEqual([]);
+    expect(overview.latestSignals).toEqual([]);
+    expect(signals).toEqual([]);
+    expect(alerts).toEqual([]);
+    expect(scans).toEqual([]);
+    expect(review).toMatchObject({
+      hitRate: 0,
+      bestSignal: "暂无真实样本",
+      worstSignal: "暂无真实样本",
+    });
+    expect(review?.falsePositiveAnalysis).toContain("尚未接入真实桥接行情");
+    expect(settings.liveBridge.trackedSymbols).toEqual(["03690", "09992"]);
+    expect(settings.liveBridge.useLiveQuotes).toBe(true);
+  });
+
   it("only notifies the owner when price precisely hits the trigger price and avoids repeated sends while staying on the same point", async () => {
     const { appRouter } = await import("./routers");
     const caller = appRouter.createCaller(createAuthContext());
@@ -604,6 +636,9 @@ describe("trading signal monitoring system", () => {
       securityLabel: "03690 · 美团-W",
       identityKey: "HK:03690",
     });
+    expect(overview.liveBridge.sourceState).toBe("live_bridge");
+    expect(overview.liveBridge.sourceLabel).toBe("Live Futu Feed · Local OpenD Bridge");
+    expect(overview.liveBridge.sourceDetail).toContain("实时行情");
     expect(overview.liveBoard.find(item => item.symbol === "09992")).toMatchObject({
       name: "泡泡马特",
       securityLabel: "09992 · 泡泡马特",

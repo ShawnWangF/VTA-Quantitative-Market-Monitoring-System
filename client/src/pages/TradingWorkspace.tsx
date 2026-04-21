@@ -28,6 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts";
+import { buildRuntimeSummaryEntries, getEmptyRealtimeStateCopy } from "./tradingRuntimeSummary";
 
 type Market = "US" | "HK";
 type SignalType = "突破啟動" | "回踩續強" | "盤口失衡" | "冲高衰竭";
@@ -261,7 +262,37 @@ export function DashboardPage() {
 
   const data = overview.data;
   if (!data || !activeBoard) {
-    return <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="当前仅展示真实行情驱动数据。"><EmptyState title="暂无真实数据" description="请先在设置页连接桥接并添加真实标的；未收到实时行情前，页面不会回退显示演示股票或演示价格。" /></BlueprintPageShell>;
+    const emptyRealtimeState = getEmptyRealtimeStateCopy();
+    return (
+      <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="当前仅展示真实行情驱动数据。">
+        <style>{`@keyframes terminalTicker { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }`}</style>
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.65fr)_minmax(20rem,0.7fr)]">
+          <EmptyState title={emptyRealtimeState.title} description={emptyRealtimeState.description} />
+          <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+            <CardContent className="space-y-4 p-4">
+              <div className="overflow-hidden rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+                <div className="mb-2 flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.24em] text-cyan-200/80">
+                  <span>LLM Runtime Summary</span>
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono">WAITING</span>
+                </div>
+                <div className="overflow-hidden whitespace-nowrap">
+                  <div className="flex min-w-max gap-4 pr-4 text-xs text-cyan-100/85" style={{ animation: "terminalTicker 28s linear infinite" }}>
+                    {[...emptyRealtimeState.runtimeSummary, ...emptyRealtimeState.runtimeSummary].map((entry, index) => (
+                      <span key={`${entry}-${index}`} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono">
+                        {entry}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm leading-6 text-slate-400">
+                当前未连接桥接，因此右侧摘要栏只展示系统运行中与等待真实数据的状态；接入 HK 03690 / HK 09992 实时行情后，这里会自动切换为实时预测与执行摘要。
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </BlueprintPageShell>
+    );
   }
 
   const trades = simulatedTrades.data ?? [];
@@ -279,13 +310,7 @@ export function DashboardPage() {
     { label: "阈值偏移%", value: activeBoard.parameterFeedback.triggerThresholdShiftPct },
     { label: "止损缓冲%", value: activeBoard.parameterFeedback.stopLossBufferPct },
   ] : [];
-  const summaryEntries = [
-    `LLM ${activeBoard.llmForecastBias ?? activeBoard.forecastSummary.trendBias} · ${activeBoard.llmForecastSummary}`,
-    `执行 ${activeBoard.suggestionAction ?? "等待触发"} · ${activeBoard.executionPrerequisite}`,
-    `预测 ${formatNumber(activeBoard.forecastSummary.predictedPrice)} · ${formatSigned(activeBoard.forecastSummary.predictedChangePct)}`,
-    `强化反馈 ${activeBoard.strategyLearning.adaptiveWeight}x · 奖励 ${activeBoard.strategyLearning.rewardScore}`,
-    `桥接 ${data.liveBridge.connectionStatus} · 最近更新 ${formatDateTime(data.liveBridge.lastQuoteAt)}`,
-  ];
+  const summaryEntries = buildRuntimeSummaryEntries(activeBoard, data.liveBridge, formatNumber, formatSigned, formatDateTime);
 
   return (
     <BlueprintPageShell

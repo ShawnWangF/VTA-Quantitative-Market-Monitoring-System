@@ -343,6 +343,36 @@ function hasFreshLiveQuote(settings: SettingsRecord) {
     && Date.now() - settings.liveBridge.lastQuoteAt <= LIVE_STALE_MS;
 }
 
+function resolveLiveDataSourceMeta(settings: SettingsRecord["liveBridge"]) {
+  const bridgeStatus = resolveBridgeStatus(settings);
+  if (!settings.useLiveQuotes) {
+    return {
+      sourceState: "awaiting_bridge" as const,
+      sourceLabel: "Real Data Required · Awaiting Bridge",
+      sourceDetail: "未启用本地桥接，页面仅展示真实数据空状态。",
+    };
+  }
+  if (bridgeStatus === "已连接" && settings.lastQuoteAt && Date.now() - settings.lastQuoteAt <= LIVE_STALE_MS) {
+    return {
+      sourceState: "live_bridge" as const,
+      sourceLabel: "Live Futu Feed · Local OpenD Bridge",
+      sourceDetail: "当前页面正在消费来自本地 OpenD 桥接的实时行情。",
+    };
+  }
+  if (settings.lastQuoteAt) {
+    return {
+      sourceState: "stale_cache" as const,
+      sourceLabel: "Bridge Cache · Awaiting Fresh Quote",
+      sourceDetail: "桥接曾提供过行情，但当前报价已陈旧，系统不会把旧缓存当作实时数据执行。",
+    };
+  }
+  return {
+    sourceState: "awaiting_bridge" as const,
+    sourceLabel: "Real Data Required · Awaiting Bridge",
+    sourceDetail: "尚未收到任何真实桥接行情，页面不会回退到示例数据。",
+  };
+}
+
 function resolveSignalSuppressionReason(signal: SignalRecord, latestPrice: number | null, settings: SettingsRecord) {
   if (signal.sourceMode === "live" && !hasFreshLiveQuote(settings)) {
     return "实时行情已陈旧，旧信号已自动降级为仅供复盘参考。";
@@ -1518,6 +1548,8 @@ export function summarizeDashboard(userId: number) {
 
   const strategyLearning = summarizeSignalLearning(signals);
 
+  const liveDataSourceMeta = resolveLiveDataSourceMeta(settings.liveBridge);
+
   return {
     productName: PRODUCT_NAME,
     marketStatus: getMarketStatus(),
@@ -1528,8 +1560,7 @@ export function summarizeDashboard(userId: number) {
     highScoreCount: displaySignals.filter(signal => signal.score >= settings.highScoreNotifyThreshold).length,
     liveBridge: {
       ...settings.liveBridge,
-        sourceLabel: settings.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge",
-
+      ...liveDataSourceMeta,
     },
     liveBoard,
     strategyLearning: {
