@@ -153,6 +153,16 @@ export type SettingsRecord = {
   updatedAt: number;
 };
 
+export type ParameterSnapshotRecord = {
+  llmBiasShift: number;
+  eventWeight: number;
+  triggerThresholdShiftPct: number;
+  stopLossBufferPct: number;
+  rewardScore: number;
+  adaptiveWeight: number;
+  updatedAtMs: number;
+};
+
 export type TradingWorkspace = {
   watchlistItems: WatchlistRecord[];
   signals: SignalRecord[];
@@ -161,6 +171,7 @@ export type TradingWorkspace = {
   reviewReport: ReviewRecord;
   settings: SettingsRecord;
   priceHistory: Record<string, PriceHistoryPoint[]>;
+  parameterSnapshots: Record<string, ParameterSnapshotRecord>;
   nextIds: {
     watchlist: number;
     signal: number;
@@ -282,6 +293,7 @@ function createSeedWorkspace(userId: number): TradingWorkspace {
         createSeedHistory(item.lastPrice, item.prevClosePrice, item.volume),
       ])
     ),
+    parameterSnapshots: {},
     nextIds: {
       watchlist: 1,
       signal: 1,

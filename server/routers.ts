@@ -104,6 +104,10 @@ type MacroContextSnapshot = {
 
 const macroContextCache = new Map<string, { expiresAt: number; value: MacroContextSnapshot }>();
 
+export function resetMacroContextCache() {
+  macroContextCache.clear();
+}
+
 function fallbackMacroContext(signal: ReturnType<typeof listSignals>[number], frame: ReturnType<typeof getSignalStrategyFrame>): MacroContextSnapshot {
   const proxyScore = Math.round((signal.quoteChangePct ?? 0) * 6 + (frame?.eventScore ?? 0));
   const marketRegime = proxyScore >= 6 ? "港股风险偏好多头代理" : proxyScore <= -6 ? "港股风险偏好偏空代理" : "港股风险偏好中性代理";
@@ -198,6 +202,63 @@ async function loadMacroContext(signal: ReturnType<typeof listSignals>[number], 
   }
 }
 
+function enrichLiveBoardEventInputs(item: any, macroContext: MacroContextSnapshot) {
+  const externalMode = macroContext.sourceMode === "external";
+  const macroScore = Number((macroContext.sentimentScore / 18).toFixed(2));
+  const newsScore = Number((macroContext.sentimentScore / 24).toFixed(2));
+  const macroInput = {
+    ...(item.eventInputs?.macro ?? {}),
+    score: externalMode ? macroScore : item.eventInputs?.macro?.score ?? macroScore,
+    source: externalMode ? "yahoo_finance_index_context" : item.eventInputs?.macro?.source ?? "market_structure_proxy",
+    sourceLabel: externalMode ? "Yahoo Finance 指数快照" : item.eventInputs?.macro?.sourceLabel ?? "市场结构代理",
+    detail: externalMode ? macroContext.indexSummary : item.eventInputs?.macro?.detail ?? macroContext.marketRegime,
+    isProxyInput: !externalMode,
+  };
+  const newsInput = {
+    ...(item.eventInputs?.news ?? {}),
+    score: externalMode ? newsScore : item.eventInputs?.news?.score ?? newsScore,
+    source: externalMode ? "yahoo_finance_news_insights" : item.eventInputs?.news?.source ?? "llm_summary_proxy",
+    sourceLabel: externalMode ? "Yahoo Finance 新闻洞察" : item.eventInputs?.news?.sourceLabel ?? "事件摘要代理",
+    detail: macroContext.newsSummary,
+    isProxyInput: !externalMode,
+  };
+  const retainedAnnotations = Array.isArray(item.eventInputs?.sourceAnnotations)
+    ? item.eventInputs.sourceAnnotations.filter((annotation: any) => annotation.key !== "macro" && annotation.key !== "news")
+    : [];
+
+  return {
+    ...item,
+    eventInputs: {
+      ...(item.eventInputs ?? {}),
+      macro: macroInput,
+      news: newsInput,
+      sourceAnnotations: [
+        {
+          key: "macro",
+          source: macroInput.source,
+          sourceLabel: macroInput.sourceLabel,
+          detail: macroInput.detail,
+          isProxyInput: macroInput.isProxyInput,
+        },
+        {
+          key: "news",
+          source: newsInput.source,
+          sourceLabel: newsInput.sourceLabel,
+          detail: newsInput.detail,
+          isProxyInput: newsInput.isProxyInput,
+        },
+        ...retainedAnnotations,
+      ],
+    },
+    externalContext: {
+      marketRegime: macroContext.marketRegime,
+      indexSummary: macroContext.indexSummary,
+      newsSummary: macroContext.newsSummary,
+      sourceMode: macroContext.sourceMode,
+    },
+  };
+}
+
 async function ensureDashboardForecastInsights(userId: number) {
   const scopedSignals = listScopedSignals(userId).slice(0, 4);
 
@@ -282,7 +343,19 @@ export const appRouter = router({
     overview: protectedProcedure.query(async ({ ctx }) => {
       await ensureHighScoreNotifications(ctx.user.id);
       await ensureDashboardForecastInsights(ctx.user.id);
-      return summarizeDashboard(ctx.user.id);
+      const summary = summarizeDashboard(ctx.user.id);
+      const signals = listSignals(ctx.user.id);
+      const liveBoard = await Promise.all(summary.liveBoard.map(async item => {
+        const activeSignal = signals.find(signal => signal.market === item.market && signal.symbol === item.symbol);
+        if (!activeSignal) return item;
+        const frame = getSignalStrategyFrame(ctx.user.id, activeSignal.id);
+        const macroContext = await loadMacroContext(activeSignal, frame);
+        return enrichLiveBoardEventInputs(item, macroContext);
+      }));
+      return {
+        ...summary,
+        liveBoard,
+      };
     }),
   }),
   watchlist: router({

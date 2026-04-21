@@ -25,6 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts";
@@ -226,6 +227,7 @@ function EmptyState({ title, description }: { title: string; description: string
 export function DashboardPage() {
   const { overview } = useTradingWorkspaceData();
   const [activeSymbol, setActiveSymbol] = useState("");
+  const [selectedMarker, setSelectedMarker] = useState<any | null>(null);
 
   const liveBoard = overview.data?.liveBoard ?? [];
   const activeBoard = useMemo(() => {
@@ -303,7 +305,19 @@ export function DashboardPage() {
     { label: "量价因子", value: activeBoard.signalReasoning.priceActionFactor },
     { label: "强化反馈", value: activeBoard.signalReasoning.reinforcementFactor },
   ] : [];
-  const eventInputEntries = Object.entries(activeBoard.eventInputs ?? {});
+  const reasoningContributionEntries = activeBoard.signalReasoning ? [
+    { label: "宏观", value: activeBoard.signalReasoning.weightContribution.macro },
+    { label: "事件", value: activeBoard.signalReasoning.weightContribution.event },
+    { label: "量价", value: activeBoard.signalReasoning.weightContribution.priceAction },
+    { label: "强化", value: activeBoard.signalReasoning.weightContribution.reinforcement },
+  ] : [];
+  const eventInputEntries = Object.entries(activeBoard.eventInputs ?? {}).filter(([key]) => key !== "sourceAnnotations");
+  const eventSourceAnnotations = activeBoard.eventInputs?.sourceAnnotations ?? [];
+  const parameterSnapshotEntries = activeBoard.parameterSnapshot ? [
+    { label: "快照奖励分", value: activeBoard.parameterSnapshot.rewardScore },
+    { label: "快照权重", value: activeBoard.parameterSnapshot.adaptiveWeight },
+    { label: "快照更新时间", value: formatDateTime(activeBoard.parameterSnapshot.updatedAtMs) },
+  ] : [];
   const parameterEntries = activeBoard.parameterFeedback ? [
     { label: "LLM 偏向", value: activeBoard.parameterFeedback.llmBiasShift },
     { label: "事件权重", value: activeBoard.parameterFeedback.eventWeight },
@@ -453,6 +467,12 @@ export function DashboardPage() {
                       fill={marker.tone === "buy" ? "#4ade80" : "#fb7185"}
                       stroke="#020617"
                       strokeWidth={1.5}
+                      shape={(props: any) => (
+                        <g className="cursor-pointer" onClick={() => setSelectedMarker(marker)}>
+                          <circle cx={props.cx} cy={props.cy} r={7} fill={marker.tone === "buy" ? "#4ade80" : "#fb7185"} stroke="#020617" strokeWidth={1.5} />
+                          <circle cx={props.cx} cy={props.cy} r={15} fill="transparent" />
+                        </g>
+                      )}
                       label={{ value: `${marker.action} ${formatNumber(marker.price)}`, position: marker.tone === "buy" ? "bottom" : "top", fill: marker.tone === "buy" ? "#86efac" : "#fda4af", fontSize: 11 }}
                     />
                   ))}
@@ -463,14 +483,15 @@ export function DashboardPage() {
 
               <div className="mt-4 grid gap-3 xl:grid-cols-4">
                 {markerInsights.length > 0 ? markerInsights.map((marker: any, index: number) => (
-                  <div key={`${marker.signalId ?? marker.label}-${index}`} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                  <button key={`${marker.signalId ?? marker.label}-${index}`} type="button" onClick={() => setSelectedMarker(marker)} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-left transition hover:border-cyan-500/40 hover:bg-[#0b1628]">
                     <div className="flex items-center justify-between gap-3">
                       <span className={`rounded-full px-2.5 py-1 font-mono text-[10px] uppercase ${marker.tone === "buy" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{marker.action}</span>
                       <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">{marker.label}</span>
                     </div>
                     <div className="mt-2 text-lg font-black text-white">{formatNumber(marker.price)}</div>
                     <div className="mt-2 text-xs leading-6 text-slate-400">{marker.explanation ?? "该点位由结构、事件与强化反馈共同触发。"}</div>
-                  </div>
+                    <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-300">点击查看完整 reasoning</div>
+                  </button>
                 )) : (
                   <div className="xl:col-span-4 rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前暂无足够的回放 marker。后续模拟交易生成后，这里会展示图上触发点与解释摘要。</div>
                 )}
@@ -530,12 +551,24 @@ export function DashboardPage() {
           <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
             <CardContent className="space-y-4 p-4">
               <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">结构化 reasoning</div>
-              {reasoningEntries.length > 0 ? reasoningEntries.map(entry => (
-                <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
-                  <div className="text-sm font-semibold text-white">{entry.label}</div>
-                  <div className="mt-2 text-sm leading-6 text-slate-400">{entry.value}</div>
-                </div>
-              )) : <div className="rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前尚未生成结构化 reasoning，等待新的有效信号。</div>}
+              {reasoningEntries.length > 0 ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {reasoningContributionEntries.map(entry => (
+                      <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                        <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{entry.label}贡献</div>
+                        <div className="mt-2 text-lg font-black text-cyan-300">{entry.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {reasoningEntries.map(entry => (
+                    <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                      <div className="text-sm font-semibold text-white">{entry.label}</div>
+                      <div className="mt-2 text-sm leading-6 text-slate-400">{entry.value}</div>
+                    </div>
+                  ))}
+                </>
+              ) : <div className="rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前尚未生成结构化 reasoning，等待新的有效信号。</div>}
             </CardContent>
           </Card>
 
@@ -545,12 +578,27 @@ export function DashboardPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {eventInputEntries.length > 0 ? eventInputEntries.map(([key, value]: any) => (
                   <div key={key} className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{key}</div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{key}</div>
+                      <Badge variant="outline" className={value.isProxyInput ? "border-amber-400/30 bg-amber-500/10 text-amber-200" : "border-cyan-400/30 bg-cyan-500/10 text-cyan-200"}>{value.isProxyInput ? "代理输入" : "实时输入"}</Badge>
+                    </div>
                     <div className="mt-2 text-lg font-black text-white">{value.score}</div>
-                    <div className="mt-2 text-xs leading-6 text-slate-400">来源：{value.source}</div>
+                    <div className="mt-2 text-xs leading-6 text-slate-400">来源：{value.sourceLabel} · {value.detail}</div>
                   </div>
                 )) : <div className="sm:col-span-2 rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前事件输入仍以代理因子为主。后续接入更稳定多源事件后，这里会展示更完整的语境分层。</div>}
               </div>
+              {eventSourceAnnotations.length > 0 ? (
+                <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">来源注释</div>
+                  <div className="mt-3 grid gap-2">
+                    {eventSourceAnnotations.map((annotation: any) => (
+                      <div key={annotation.key} className="rounded-2xl border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs leading-6 text-slate-300">
+                        <span className="font-semibold text-white">{annotation.key}</span> · {annotation.sourceLabel}{annotation.isProxyInput ? "（代理）" : "（实时）"} · {annotation.detail}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
                 {parameterEntries.map(item => (
                   <div key={item.label} className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
@@ -559,10 +607,106 @@ export function DashboardPage() {
                   </div>
                 ))}
               </div>
+              {parameterSnapshotEntries.length > 0 ? (
+                <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">独立参数快照</div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {parameterSnapshotEntries.map(item => (
+                      <div key={item.label} className="rounded-2xl border border-slate-800/80 bg-slate-950/40 px-3 py-3">
+                        <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">{item.label}</div>
+                        <div className="mt-2 text-sm font-semibold text-white">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         </div>
       </div>
+
+      <Sheet open={!!selectedMarker} onOpenChange={open => { if (!open) setSelectedMarker(null); }}>
+        <SheetContent side="right" className="w-full border-l border-slate-800 bg-[#07111f] text-slate-100 sm:max-w-xl">
+          <SheetHeader className="border-b border-slate-800/80 px-5 py-5">
+            <SheetTitle className="text-xl font-black tracking-[-0.03em] text-white">{selectedMarker?.action ?? "MARKER"} · {selectedMarker ? formatNumber(selectedMarker.price) : "--"}</SheetTitle>
+            <SheetDescription className="text-slate-400">{selectedMarker?.explanation ?? "点击主图上的 BUY / SELL marker 后，这里会展示结构化 reasoning、参数反馈与代理输入注释。"}</SheetDescription>
+          </SheetHeader>
+          <div className="space-y-4 overflow-y-auto p-5">
+            {selectedMarker?.reasoning ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    { label: "宏观", value: selectedMarker.reasoning.weightContribution.macro },
+                    { label: "事件", value: selectedMarker.reasoning.weightContribution.event },
+                    { label: "量价", value: selectedMarker.reasoning.weightContribution.priceAction },
+                    { label: "强化", value: selectedMarker.reasoning.weightContribution.reinforcement },
+                  ].map((entry: any) => (
+                    <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{entry.label}贡献</div>
+                      <div className="mt-2 text-lg font-black text-cyan-300">{entry.value}</div>
+                    </div>
+                  ))}
+                </div>
+                {[
+                  { label: "宏观因子", value: selectedMarker.reasoning.macroFactor },
+                  { label: "事件因子", value: selectedMarker.reasoning.eventFactor },
+                  { label: "量价因子", value: selectedMarker.reasoning.priceActionFactor },
+                  { label: "强化反馈", value: selectedMarker.reasoning.reinforcementFactor },
+                ].map((entry: any) => (
+                  <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                    <div className="text-sm font-semibold text-white">{entry.label}</div>
+                    <div className="mt-2 text-sm leading-6 text-slate-400">{entry.value}</div>
+                  </div>
+                ))}
+              </>
+            ) : null}
+            {selectedMarker?.eventInputs?.sourceAnnotations?.length ? (
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">事件来源注释</div>
+                <div className="mt-3 grid gap-2">
+                  {selectedMarker.eventInputs.sourceAnnotations.map((annotation: any) => (
+                    <div key={annotation.key} className="rounded-2xl border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs leading-6 text-slate-300">
+                      <span className="font-semibold text-white">{annotation.key}</span> · {annotation.sourceLabel}{annotation.isProxyInput ? "（代理输入）" : "（实时输入）"} · {annotation.detail}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {selectedMarker?.parameterFeedback ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  { label: "LLM 偏向", value: selectedMarker.parameterFeedback.llmBiasShift },
+                  { label: "事件权重", value: selectedMarker.parameterFeedback.eventWeight },
+                  { label: "阈值偏移%", value: selectedMarker.parameterFeedback.triggerThresholdShiftPct },
+                  { label: "止损缓冲%", value: selectedMarker.parameterFeedback.stopLossBufferPct },
+                ].map((entry: any) => (
+                  <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{entry.label}</div>
+                    <div className="mt-2 text-lg font-black text-cyan-300">{entry.value}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {activeBoard.parameterSnapshot ? (
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">独立参数快照</div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  {[
+                    { label: "快照奖励分", value: activeBoard.parameterSnapshot.rewardScore },
+                    { label: "快照权重", value: activeBoard.parameterSnapshot.adaptiveWeight },
+                    { label: "更新时间", value: formatDateTime(activeBoard.parameterSnapshot.updatedAtMs) },
+                  ].map((entry: any) => (
+                    <div key={entry.label} className="rounded-2xl border border-slate-800/80 bg-slate-950/40 px-3 py-3">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">{entry.label}</div>
+                      <div className="mt-2 text-sm font-semibold text-white">{entry.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
         <CardContent className="space-y-4 p-4 xl:p-5">

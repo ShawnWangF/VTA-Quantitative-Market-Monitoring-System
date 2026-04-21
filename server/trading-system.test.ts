@@ -4,6 +4,7 @@ import { createAlertFromSignal, getSettings, ingestLiveQuotes, listAlerts, listS
 import { resetWorkspace } from "./mockData";
 
 const notifyOwnerMock = vi.fn(async () => true);
+const callDataApiMock = vi.fn(async () => ({}));
 const invokeLLMMock = vi.fn(async () => ({
   id: "mock-response",
   created: Date.now(),
@@ -26,6 +27,10 @@ vi.mock("./_core/notification", () => ({
 
 vi.mock("./_core/llm", () => ({
   invokeLLM: invokeLLMMock,
+}));
+
+vi.mock("./_core/dataApi", () => ({
+  callDataApi: callDataApiMock,
 }));
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -658,7 +663,59 @@ describe("trading signal monitoring system", () => {
     expect(overview.liveBoard[0]?.strategyLearning).toMatchObject({
       rewardScore: expect.any(Number),
       sharpeLikeScore: expect.any(Number),
+      adaptiveWeight: expect.any(Number),
     });
+    expect(overview.liveBoard[0]?.signalReasoning).toMatchObject({
+      macroFactor: expect.any(String),
+      eventFactor: expect.any(String),
+      priceActionFactor: expect.any(String),
+      reinforcementFactor: expect.any(String),
+      weightContribution: {
+        macro: expect.any(Number),
+        event: expect.any(Number),
+        priceAction: expect.any(Number),
+        reinforcement: expect.any(Number),
+      },
+    });
+    expect(overview.liveBoard[0]?.parameterFeedback).toMatchObject({
+      eventWeight: expect.any(Number),
+      llmBiasShift: expect.any(Number),
+      triggerThresholdShiftPct: expect.any(Number),
+      stopLossBufferPct: expect.any(Number),
+    });
+    expect(overview.liveBoard[0]?.parameterSnapshot).toMatchObject({
+      rewardScore: expect.any(Number),
+      adaptiveWeight: expect.any(Number),
+      updatedAtMs: expect.any(Number),
+    });
+    expect(overview.liveBoard[0]?.eventInputs).toMatchObject({
+      macro: {
+        score: expect.any(Number),
+        sourceLabel: expect.any(String),
+        isProxyInput: expect.any(Boolean),
+      },
+      news: {
+        score: expect.any(Number),
+        sourceLabel: expect.any(String),
+        isProxyInput: expect.any(Boolean),
+      },
+      companyEvent: {
+        score: expect.any(Number),
+        sourceLabel: expect.any(String),
+        isProxyInput: true,
+      },
+      sentiment: {
+        score: expect.any(Number),
+        sourceLabel: expect.any(String),
+        isProxyInput: true,
+      },
+      earnings: {
+        score: expect.any(Number),
+        sourceLabel: expect.any(String),
+        isProxyInput: true,
+      },
+    });
+    expect(overview.liveBoard[0]?.eventInputs?.sourceAnnotations.some((annotation: any) => annotation.isProxyInput)).toBe(true);
     expect(overview.liveBoard[0]?.simulationSummary).toMatchObject({
       averageRewardScore: expect.any(Number),
     });
@@ -702,6 +759,202 @@ describe("trading signal monitoring system", () => {
       holdingMinutes: expect.any(Number),
       rewardScore: expect.any(Number),
       explanation: expect.any(String),
+      reasoning: {
+        weightContribution: {
+          macro: expect.any(Number),
+          event: expect.any(Number),
+          priceAction: expect.any(Number),
+          reinforcement: expect.any(Number),
+        },
+      },
+      parameterFeedback: {
+        eventWeight: expect.any(Number),
+        llmBiasShift: expect.any(Number),
+        triggerThresholdShiftPct: expect.any(Number),
+        stopLossBufferPct: expect.any(Number),
+      },
+      eventInputs: {
+        sourceAnnotations: expect.any(Array),
+      },
+    });
+  });
+
+  it("injects external macro and news context into dashboard event inputs when official data is available", async () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "03690",
+          name: "美团-W",
+          lastPrice: 151.4,
+          volume: 15200000,
+          turnover: 2280000000,
+          openPrice: 149.6,
+          highPrice: 152.2,
+          lowPrice: 149.1,
+          prevClosePrice: 147.8,
+        },
+      ],
+    });
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalVitest = process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    callDataApiMock.mockImplementation(async (endpoint: string, payload: any) => {
+      if (endpoint === "YahooFinance/get_stock_insights") {
+        return {
+          finance: {
+            result: {
+              sigDevs: [
+                { headline: "Meituan trims subsidy cadence and guides focus on margin discipline" },
+                { headline: "Analysts flag delivery competition easing in core cities" },
+              ],
+            },
+          },
+        };
+      }
+      if (endpoint === "YahooFinance/get_stock_chart" && payload?.query?.symbol === "^HSI") {
+        return {
+          chart: {
+            result: [{ indicators: { quote: [{ close: [18000, 18120, 18240] }] } }],
+          },
+        };
+      }
+      if (endpoint === "YahooFinance/get_stock_chart" && payload?.query?.symbol === "^HSTECH") {
+        return {
+          chart: {
+            result: [{ indicators: { quote: [{ close: [3500, 3525, 3550] }] } }],
+          },
+        };
+      }
+      return {};
+    });
+
+    try {
+      const { appRouter, resetMacroContextCache } = await import("./routers");
+      resetMacroContextCache();
+      const caller = appRouter.createCaller(createAuthContext());
+      const overview = await caller.dashboard.overview();
+      const meituanBoard = overview.liveBoard.find(item => item.symbol === "03690");
+
+      expect(meituanBoard?.eventInputs?.macro).toMatchObject({
+        sourceLabel: "Yahoo Finance 指数快照",
+        isProxyInput: false,
+      });
+      expect(meituanBoard?.eventInputs?.news).toMatchObject({
+        sourceLabel: "Yahoo Finance 新闻洞察",
+        isProxyInput: false,
+      });
+      expect(meituanBoard?.externalContext).toMatchObject({
+        sourceMode: "external",
+        indexSummary: expect.stringContaining("HSI"),
+        newsSummary: expect.stringContaining("Meituan"),
+      });
+      expect(meituanBoard?.parameterSnapshot).toMatchObject({
+        rewardScore: expect.any(Number),
+        adaptiveWeight: expect.any(Number),
+        updatedAtMs: expect.any(Number),
+      });
+    } finally {
+      callDataApiMock.mockReset();
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalVitest) {
+        process.env.VITEST = originalVitest;
+      } else {
+        delete process.env.VITEST;
+      }
+      const { resetMacroContextCache } = await import("./routers");
+      resetMacroContextCache();
+    }
+  });
+
+  it("writes simulated-trade feedback into parameter snapshots and changes the next signal weight", () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡马特",
+          lastPrice: 37.2,
+          volume: 13020000,
+          turnover: 431000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
+    const firstSignal = listSignals(1).find(signal => signal.symbol === "09992");
+    const firstOverview = summarizeDashboard(1).liveBoard.find(item => item.symbol === "09992");
+    expect(firstSignal).toBeDefined();
+    expect(firstOverview?.strategyLearning.rewardScore).toBeDefined();
+
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡马特",
+          lastPrice: 38.2,
+          volume: 14100000,
+          turnover: 502000000,
+          openPrice: 36.1,
+          highPrice: 38.3,
+          lowPrice: 36.0,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡马特",
+          lastPrice: 37.3,
+          volume: 15800000,
+          turnover: 565000000,
+          openPrice: 38.2,
+          highPrice: 39.4,
+          lowPrice: 37.0,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
+    const signalFamily = listSignals(1).filter(signal => signal.symbol === "09992");
+    const latestSignal = signalFamily[0];
+    const latestOverview = summarizeDashboard(1).liveBoard.find(item => item.symbol === "09992");
+
+    expect(signalFamily.length).toBeGreaterThan(1);
+    expect(latestSignal?.strategyWeight).not.toBe(firstSignal?.strategyWeight);
+    expect(latestOverview?.strategyLearning.rewardScore).not.toBe(firstOverview?.strategyLearning.rewardScore);
+    expect(latestOverview?.strategyLearning.adaptiveWeight).not.toBe(firstOverview?.strategyLearning.adaptiveWeight);
+    expect(latestOverview?.parameterFeedback).toMatchObject({
+      eventWeight: expect.any(Number),
+      llmBiasShift: expect.any(Number),
+      triggerThresholdShiftPct: expect.any(Number),
+      stopLossBufferPct: expect.any(Number),
     });
   });
 
