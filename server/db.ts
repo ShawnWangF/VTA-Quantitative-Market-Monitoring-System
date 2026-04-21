@@ -20,6 +20,7 @@ import {
   type TriggerAction,
   type WatchlistRecord,
 } from "./mockData";
+import { formatSecurityLabel, getCanonicalTrackedName } from "../shared/trackedSecurities";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -644,7 +645,7 @@ function buildSimulatedTradesForSymbol(item: WatchlistRecord, history: PriceHist
       market: item.market,
       symbol: item.symbol,
       name: item.name,
-      securityLabel: `${item.symbol} · ${item.name}`,
+      securityLabel: formatSecurityLabel(item.market, item.symbol, item.name),
       identityKey: symbolKey(item.market, item.symbol),
       signalType: signal.signalType,
       action: signal.triggerAction === "买入提醒" ? "BUY" : "SELL",
@@ -1419,11 +1420,11 @@ export function summarizeDashboard(userId: number) {
     const matchedSecurity = watchlistMap.get(symbolKey(signal.market, signal.symbol))
       ?? workspace.watchlistItems.find(item => symbolKey(item.market, item.symbol) === symbolKey(signal.market, signal.symbol))
       ?? null;
-    const matchedName = matchedSecurity?.name ?? signal.symbol;
+    const matchedName = matchedSecurity?.name ?? getCanonicalTrackedName(signal.market, signal.symbol) ?? signal.symbol;
     return {
       ...signal,
       name: matchedName,
-      securityLabel: `${signal.symbol} · ${matchedName}`,
+      securityLabel: formatSecurityLabel(signal.market, signal.symbol, matchedName),
       identityKey: symbolKey(signal.market, signal.symbol),
     };
   });
@@ -1454,7 +1455,7 @@ export function summarizeDashboard(userId: number) {
     } : null;
     return {
       ...item,
-      securityLabel: `${item.symbol} · ${item.name}`,
+      securityLabel: formatSecurityLabel(item.market, item.symbol, item.name),
       identityKey: symbolKey(item.market, item.symbol),
       activeSignalType: activeSignal?.signalType ?? null,
       activeSignalScore: activeSignal?.score ?? null,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
+import { formatSecurityLabel, getCanonicalTrackedName } from "@shared/trackedSecurities";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
@@ -325,12 +326,12 @@ export const appRouter = router({
       );
       return listScopedSignals(ctx.user.id).map(signal => {
         const matchedSecurity = watchlistMap.get(`${signal.market}:${signal.symbol}`) ?? null;
-        const matchedName = matchedSecurity?.name ?? signal.symbol;
+        const matchedName = matchedSecurity?.name ?? getCanonicalTrackedName(signal.market, signal.symbol) ?? signal.symbol;
         const signalDetails = describeSignal(ctx.user.id, signal.id);
         return {
           ...signal,
           name: matchedName,
-          securityLabel: `${signal.symbol} · ${matchedName}`,
+          securityLabel: formatSecurityLabel(signal.market, signal.symbol, matchedName),
           identityKey: `${signal.market}:${signal.symbol}`,
           reasoning: signalDetails?.reasoning ?? null,
           parameterFeedback: signalDetails?.parameterFeedback ?? null,

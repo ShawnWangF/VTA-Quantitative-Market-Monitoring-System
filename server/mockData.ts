@@ -1,4 +1,6 @@
 export type Market = "US" | "HK";
+import { DEFAULT_TRACKED_SYMBOLS } from "../shared/trackedSecurities";
+
 export type SignalType = "突破啟動" | "回踩續強" | "盤口失衡" | "冲高衰竭";
 export type AlertLevel = "INFO" | "WARNING" | "CRITICAL";
 export type Direction = "做多" | "做空" | "观察";
@@ -252,7 +254,7 @@ function seededSettings(userId: number): SettingsRecord {
       provider: "FUTU_LOCAL_OPEND",
       opendHost: "127.0.0.1",
       opendPort: 11111,
-      trackedSymbols: [],
+      trackedSymbols: [...DEFAULT_TRACKED_SYMBOLS],
       bridgeToken: defaultBridgeToken(userId),
       publishIntervalSeconds: 3,
       useLiveQuotes: true,

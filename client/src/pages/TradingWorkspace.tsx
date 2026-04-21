@@ -668,7 +668,7 @@ export function WatchlistPage() {
               </div>
               <div className="grid gap-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">标的代码</label>
-                <Input value={form.symbol} onChange={event => setForm(prev => ({ ...prev, symbol: event.target.value.toUpperCase() }))} placeholder="输入真实股票代码，例如 AAPL 或 00700" />
+                <Input value={form.symbol} onChange={event => setForm(prev => ({ ...prev, symbol: event.target.value.toUpperCase() }))} placeholder="输入真实股票代码，例如 03690 或 09992" />
               </div>
               <div className="grid gap-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">标的名称</label>
@@ -1173,7 +1173,7 @@ export function SettingsPage() {
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">追踪标的</label>
-                <Input value={form.trackedSymbols} onChange={event => setForm(prev => ({ ...prev, trackedSymbols: event.target.value }))} placeholder="输入真实追踪代码，逗号分隔，例如 AAPL,MSFT 或 00700,09988" />
+                <Input value={form.trackedSymbols} onChange={event => setForm(prev => ({ ...prev, trackedSymbols: event.target.value }))} placeholder="输入真实追踪代码，逗号分隔，例如 03690,09992" />
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">桥接令牌</label>
@@ -1298,7 +1298,7 @@ export function SettingsPage() {
                 <ol className="mt-3 space-y-2 pl-5 list-decimal">
                   <li>保持 Futu OpenD 已登录，地址为 {form.opendHost}，端口为 {form.opendPort}。</li>
                   <li>在本地桥接程序配置中填入当前页面展示的云端接收地址和桥接令牌，配置键名需使用 `cloud_ingest_url`、`bridge_token`、`opend_host`、`opend_port`、`tracked_symbols`、`publish_interval_seconds`。</li>
-                  <li>`tracked_symbols` 必须填写为你的真实追踪代码数组，例如 `["AAPL","MSFT"]` 或 `["00700","09988"]`；留空会报 `tracked_symbols 不能为空`。</li>
+                  <li>`tracked_symbols` 必须填写为你的真实追踪代码数组；你当前可直接使用 `["03690","09992"]`，分别对应 HK 03690 美团-W 与 HK 09992 泡泡马特。留空会报 `tracked_symbols 不能为空`。</li>
                   <li>启动时必须使用 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`；在 PowerShell 中也必须保留 `--config` 与配置文件路径的显式写法。</li>
                   <li>当桥接状态变为“已连接”时，仪表板、观察名單和实时信号页会自动刷新为实时行情驱动。</li>
                 </ol>

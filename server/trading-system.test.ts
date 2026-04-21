@@ -90,7 +90,7 @@ describe("trading signal monitoring system", () => {
     expect(listAlerts(1)).toHaveLength(0);
     expect(overview.liveBoard).toEqual([]);
     expect(overview.latestSignals).toEqual([]);
-    expect(settings.liveBridge.trackedSymbols).toEqual([]);
+    expect(settings.liveBridge.trackedSymbols).toEqual(["03690", "09992"]);
     expect(settings.liveBridge.useLiveQuotes).toBe(true);
   });
 
@@ -107,7 +107,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.12,
           volume: 12880000,
           turnover: 428000000,
@@ -133,7 +133,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.2,
           volume: 13020000,
           turnover: 431000000,
@@ -163,7 +163,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.2,
           volume: 13110000,
           turnover: 432000000,
@@ -187,7 +187,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.35,
           volume: 13360000,
           turnover: 438000000,
@@ -229,7 +229,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.12,
           volume: 12880000,
           turnover: 428000000,
@@ -261,8 +261,8 @@ describe("trading signal monitoring system", () => {
       identityKey: "HK:03690",
     });
     expect(signals.find(signal => signal.symbol === "09992")).toMatchObject({
-      name: "泡泡玛特",
-      securityLabel: "09992 · 泡泡玛特",
+      name: "泡泡马特",
+      securityLabel: "09992 · 泡泡马特",
       identityKey: "HK:09992",
     });
   });
@@ -280,7 +280,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 38.5,
           volume: 13200000,
           turnover: 488000000,
@@ -314,7 +314,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.12,
           volume: 12880000,
           turnover: 428000000,
@@ -335,7 +335,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 37.2,
           volume: 12880000,
           turnover: 428000000,
@@ -485,7 +485,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 38.5,
           volume: 13200000,
           turnover: 488000000,
@@ -518,7 +518,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 38.8,
           volume: 13800000,
           turnover: 512000000,
@@ -560,7 +560,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 38.9,
           volume: 14600000,
           turnover: 538000000,
@@ -605,8 +605,8 @@ describe("trading signal monitoring system", () => {
       identityKey: "HK:03690",
     });
     expect(overview.liveBoard.find(item => item.symbol === "09992")).toMatchObject({
-      name: "泡泡玛特",
-      securityLabel: "09992 · 泡泡玛特",
+      name: "泡泡马特",
+      securityLabel: "09992 · 泡泡马特",
       identityKey: "HK:09992",
     });
     expect(overview.liveBoard.find(item => item.symbol === "03690")).toMatchObject({
@@ -639,7 +639,7 @@ describe("trading signal monitoring system", () => {
         {
           market: "HK",
           symbol: "09992",
-          name: "泡泡玛特",
+          name: "泡泡马特",
           lastPrice: 38.9,
           volume: 14600000,
           turnover: 538000000,
@@ -658,7 +658,7 @@ describe("trading signal monitoring system", () => {
     expect(trades.length).toBeGreaterThan(0);
     expect(trades[0]).toMatchObject({
       symbol: "09992",
-      securityLabel: "09992 · 泡泡玛特",
+      securityLabel: "09992 · 泡泡马特",
       action: expect.stringMatching(/BUY|SELL/),
       entryPrice: expect.any(Number),
       simulatedExitPrice: expect.any(Number),
