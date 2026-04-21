@@ -88,6 +88,8 @@ export type AlertRecord = {
   message: string;
   notifyTriggered: number;
   sourceMode: QuoteSourceMode;
+  triggerAction?: TriggerAction;
+  triggerPrice?: number;
   createdAtMs: number;
 };
 

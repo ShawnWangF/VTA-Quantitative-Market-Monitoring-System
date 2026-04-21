@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
-import { getSettings, ingestLiveQuotes, listScopedSignals, listSignals, listWatchlist, summarizeDashboard } from "./db";
+import { getSettings, ingestLiveQuotes, listAlerts, listScopedSignals, listSignals, listWatchlist, summarizeDashboard } from "./db";
 import { resetWorkspace } from "./mockData";
 
 const notifyOwnerMock = vi.fn(async () => true);
@@ -81,7 +81,10 @@ describe("trading signal monitoring system", () => {
     invokeLLMMock.mockClear();
   });
 
-  it("returns dashboard overview and triggers owner notification for high-score signals", async () => {
+  it("only notifies the owner when price precisely hits the trigger price and avoids repeated sends while staying on the same point", async () => {
+    const { appRouter } = await import("./routers");
+    const caller = appRouter.createCaller(createAuthContext());
+
     ingestLiveQuotes(1, {
       opendHost: "127.0.0.1",
       opendPort: 11111,
@@ -103,14 +106,92 @@ describe("trading signal monitoring system", () => {
       ],
     });
 
-    const { appRouter } = await import("./routers");
-    const caller = appRouter.createCaller(createAuthContext());
+    const firstOverview = await caller.dashboard.overview();
+    expect(firstOverview.productName).toBe("Shawn Wang 量化盯盘系统");
+    expect(firstOverview.highScoreCount).toBeGreaterThan(0);
+    expect(notifyOwnerMock).not.toHaveBeenCalled();
 
-    const overview = await caller.dashboard.overview();
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.2,
+          volume: 13020000,
+          turnover: 431000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
 
-    expect(overview.productName).toBe("Shawn Wang 量化盯盘系统");
-    expect(overview.highScoreCount).toBeGreaterThan(0);
-    expect(notifyOwnerMock).toHaveBeenCalled();
+    const secondOverview = await caller.dashboard.overview();
+    const exactHitAlert = listAlerts(1).find(alert => alert.symbol === "09992" && alert.triggerPrice === 37.2);
+    expect(secondOverview.highScoreCount).toBeGreaterThan(0);
+    expect(exactHitAlert).toMatchObject({
+      triggerAction: "买入提醒",
+      triggerPrice: 37.2,
+    });
+    expect(notifyOwnerMock).toHaveBeenCalledTimes(1);
+
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.2,
+          volume: 13110000,
+          turnover: 432000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
+    await caller.dashboard.overview();
+    expect(notifyOwnerMock).toHaveBeenCalledTimes(1);
+
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.35,
+          volume: 13360000,
+          turnover: 438000000,
+          openPrice: 35.98,
+          highPrice: 37.35,
+          lowPrice: 36.1,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+
+    await caller.dashboard.overview();
+    expect(listAlerts(1).find(alert => alert.symbol === "09992" && alert.triggerPrice === 37.35)).toMatchObject({
+      triggerAction: "买入提醒",
+      triggerPrice: 37.35,
+    });
+    expect(notifyOwnerMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns structured trading suggestions with required field names", async () => {

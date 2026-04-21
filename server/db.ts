@@ -29,6 +29,10 @@ const SIGNAL_COOLDOWN_MS = 15 * 60 * 1000;
 const PRICE_HISTORY_LIMIT = 90;
 const FORECAST_POINT_COUNT = 6;
 const MAX_ACTIONABLE_DEVIATION_PCT = 6;
+const TRIGGER_HIT_TOLERANCE_BY_MARKET: Record<Market, number> = {
+  HK: 0.02,
+  US: 0.01,
+};
 
 type LiveQuoteInput = {
   market: Market;
@@ -290,6 +294,25 @@ function sensitivityAdjustment(sensitivity: SignalSensitivity) {
 
 function symbolKey(market: Market, symbol: string) {
   return `${market}:${normalizeSymbol(market, symbol)}`;
+}
+
+function getTriggerHitTolerance(market: Market, triggerPrice: number) {
+  return Math.max(TRIGGER_HIT_TOLERANCE_BY_MARKET[market], round(triggerPrice * 0.0001, 4));
+}
+
+function isInsidePrecisionTriggerZone(price: number | null | undefined, market: Market, triggerPrice: number) {
+  if (typeof price !== "number" || !Number.isFinite(price)) return false;
+  return Math.abs(price - triggerPrice) <= getTriggerHitTolerance(market, triggerPrice);
+}
+
+function justEnteredPrecisionTriggerZone(signal: SignalRecord, history: PriceHistoryPoint[]) {
+  if (signal.triggerAction === "观察提醒") return false;
+  if (!(signal.triggerPrice > 0)) return false;
+  const previousPrice = history.at(-2)?.price;
+  const currentPrice = history.at(-1)?.price ?? signal.quotePrice;
+  const currentInside = isInsidePrecisionTriggerZone(currentPrice, signal.market, signal.triggerPrice);
+  const previousInside = isInsidePrecisionTriggerZone(previousPrice, signal.market, signal.triggerPrice);
+  return currentInside && !previousInside;
 }
 
 function timeLabel(timestampMs: number) {
@@ -1018,23 +1041,26 @@ function upsertSignalFromQuote(userId: number, quote: LiveQuoteInput, settings: 
 
 function ensureAlertForSignal(userId: number, signal: SignalRecord, settings: SettingsRecord) {
   const workspace = getWorkspace(userId);
+  const history = workspace.priceHistory[symbolKey(signal.market, signal.symbol)] ?? [];
+  if (!justEnteredPrecisionTriggerZone(signal, history)) {
+    return null;
+  }
+
   const level = deriveSignalAlertLevel(signal.score, settings.alertLevelPreference);
-  const title = `${signal.symbol} ${signal.signalType} · ${signal.score} 分`;
-  const message = `${signal.triggerReason} ${signal.triggerAction}价位：${signal.triggerPrice}，止损参考：${signal.stopLossPrice ?? signal.stopLoss}。`;
+  const hitTolerance = getTriggerHitTolerance(signal.market, signal.triggerPrice);
+  const title = `${signal.symbol} ${signal.triggerAction === "买入提醒" ? "BUY" : "SELL"} 精确命中 · ${signal.score} 分`;
+  const message = `${signal.triggerReason} 当前价格 ${signal.quotePrice} 已命中 ${signal.triggerAction} 价位 ${signal.triggerPrice}（容差 ±${hitTolerance}），止损参考：${signal.stopLossPrice ?? signal.stopLoss}。`;
 
   const duplicate = workspace.alerts.find(
     alert =>
       alert.symbol === signal.symbol &&
       alert.signalType === signal.signalType &&
+      alert.triggerAction === signal.triggerAction &&
+      alert.triggerPrice === signal.triggerPrice &&
       Date.now() - alert.createdAtMs <= SIGNAL_COOLDOWN_MS
   );
 
   if (duplicate) {
-    duplicate.level = level;
-    duplicate.title = title;
-    duplicate.message = message;
-    duplicate.sourceMode = signal.sourceMode;
-    duplicate.createdAtMs = Date.now();
     return duplicate;
   }
 
@@ -1050,6 +1076,8 @@ function ensureAlertForSignal(userId: number, signal: SignalRecord, settings: Se
     message,
     notifyTriggered: 0,
     sourceMode: signal.sourceMode,
+    triggerAction: signal.triggerAction,
+    triggerPrice: signal.triggerPrice,
     createdAtMs: Date.now(),
   };
 
@@ -1239,6 +1267,8 @@ export function createAlertFromSignal(
     message,
     notifyTriggered: 0,
     sourceMode: signal.sourceMode,
+    triggerAction: signal.triggerAction,
+    triggerPrice: signal.triggerPrice,
     createdAtMs: Date.now(),
   };
   workspace.alerts.unshift(alert);
@@ -1416,6 +1446,14 @@ export function summarizeDashboard(userId: number) {
     const simulation = buildSimulationTape(item, history, signalFamily);
     const forecastEnd = chart[chart.length - 1]?.forecastPrice ?? item.lastPrice;
     const trendBias = forecastEnd >= item.lastPrice ? "偏多" : "偏空";
+    const activeReasoning = activeSignal ? deriveSignalReasoning(workspace, item, activeSignal, history) : null;
+    const activeParameterFeedback = activeSignal ? deriveAdaptiveParameterFeedback(workspace, item.market, item.symbol, activeSignal.signalType) : null;
+    const eventInputs = activeSignal ? {
+      macro: { source: settings.liveBridge.useLiveQuotes ? "live_quote_proxy" : "demo_proxy", score: round(activeSignal.quoteChangePct * 0.45, 2) },
+      news: { source: activeSignal.llmForecastGeneratedAtMs ? "llm_summary_proxy" : "price_action_proxy", score: round((activeSignal.score - 70) / 10, 2) },
+      companyEvent: { source: activeSignal.signalType === "突破啟動" ? "breakout_structure_proxy" : "signal_structure_proxy", score: round((activeSignal.direction === "做空" ? -1 : 1) * 1.2, 2) },
+      sentiment: { source: activeSignal.llmForecastBias ? "llm_bias_proxy" : "volume_proxy", score: round(activeSignal.direction === "做空" ? -0.8 : 0.8, 2) },
+    } : null;
     return {
       ...item,
       securityLabel: `${item.symbol} · ${item.name}`,
@@ -1431,6 +1469,9 @@ export function summarizeDashboard(userId: number) {
       chart,
       simulationTape: simulation.trades,
       simulationSummary: simulation.summary,
+      signalReasoning: activeReasoning,
+      parameterFeedback: activeParameterFeedback,
+      eventInputs,
       forecastSummary: {
         trendBias,
         predictedPrice: forecastEnd,
@@ -1463,11 +1504,15 @@ export function summarizeDashboard(userId: number) {
         action: activeSignal.triggerAction,
       } : null,
       simulationMarkers: simulation.trades.map(trade => ({
+        signalId: trade.signalId,
         label: trade.markerLabel,
         price: trade.markerPrice,
         action: trade.action,
         tone: trade.markerTone,
         pnlPct: trade.statusLabel === "持仓中" ? trade.unrealizedPnlPct : trade.realizedPnlPct,
+        explanation: trade.explanation,
+        reasoning: trade.reasoning,
+        parameterFeedback: trade.parameterFeedback,
       })),
     };
   });

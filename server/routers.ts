@@ -36,24 +36,33 @@ const sensitivitySchema = z.enum(["保守", "标准", "激进"]);
 async function ensureHighScoreNotifications(userId: number) {
   const settings = getSettings(userId);
   const alerts = listAlerts(userId);
-  const pending = alerts.filter(alert => alert.notifyTriggered === 0 && alert.level === "CRITICAL");
+  const pending = alerts.filter(
+    alert =>
+      alert.notifyTriggered === 0 &&
+      alert.level === "CRITICAL" &&
+      typeof alert.triggerPrice === "number" &&
+      !!alert.triggerAction
+  );
 
   for (const alert of pending) {
     const signal = listSignals(userId).find(item => item.id === alert.signalId);
     if (!signal || signal.score < settings.highScoreNotifyThreshold) continue;
+    if (alert.triggerPrice !== signal.triggerPrice || alert.triggerAction !== signal.triggerAction) continue;
 
     const sent = await notifyOwner({
-      title: `Shawn Wang 量化盯盘系统｜${signal.symbol} ${signal.signalType}`,
+      title: `Shawn Wang 量化盯盘系统｜${signal.symbol} ${alert.triggerAction === "买入提醒" ? "BUY" : "SELL"} 精确命中`,
       content: [
         `市场：${signal.market}`,
         `评分：${signal.score}`,
         `方向：${signal.direction}`,
         `触发动作：${signal.triggerAction}`,
         `触发价位：${signal.triggerPrice}`,
+        `当前价格：${signal.quotePrice}`,
         `止损价位：${signal.stopLossPrice ?? signal.stopLoss}`,
         `失效条件：${signal.invalidationCondition}`,
         `理由说明：${signal.rationale}`,
-        `行情快照：价格 ${signal.quotePrice} / 涨跌幅 ${signal.quoteChangePct}% / 成交量 ${signal.quoteVolume}`,
+        `说明：本次通知仅因实时价格精确命中触发价而发送，价格处于触发区间但未命中点位时不会重复推送。`,
+        `行情快照：涨跌幅 ${signal.quoteChangePct}% / 成交量 ${signal.quoteVolume}`,
       ].join("\n"),
     });
 
