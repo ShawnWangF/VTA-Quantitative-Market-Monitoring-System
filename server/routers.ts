@@ -4,12 +4,16 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
+import { callDataApi } from "./_core/dataApi";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   addWatchlistItem,
+  buildSimulatedTrades,
   createStructuredSuggestion,
+  describeSignal,
   getLatestReview,
   getSettings,
+  getSignalStrategyFrame,
   listAlerts,
   listScanResults,
   listScopedSignals,
@@ -80,6 +84,110 @@ function fallbackForecastInsight(signal: ReturnType<typeof listSignals>[number])
   };
 }
 
+type MacroContextSnapshot = {
+  marketRegime: string;
+  indexSummary: string;
+  newsSummary: string;
+  sentimentScore: number;
+  sourceMode: "external" | "fallback";
+};
+
+const macroContextCache = new Map<string, { expiresAt: number; value: MacroContextSnapshot }>();
+
+function fallbackMacroContext(signal: ReturnType<typeof listSignals>[number], frame: ReturnType<typeof getSignalStrategyFrame>): MacroContextSnapshot {
+  const proxyScore = Math.round((signal.quoteChangePct ?? 0) * 6 + (frame?.eventScore ?? 0));
+  const marketRegime = proxyScore >= 6 ? "港股风险偏好多头代理" : proxyScore <= -6 ? "港股风险偏好偏空代理" : "港股风险偏好中性代理";
+  return {
+    marketRegime,
+    indexSummary: "HSI / HSTECH 外部快照暂不可用，当前回退为基于两支观察标的和分时结构的港股风险偏好代理。",
+    newsSummary: "暂无稳定的外部新闻摘要输入，当前先使用价格结构、成交变化与历史反馈作为语境层。",
+    sentimentScore: Math.max(-99, Math.min(99, proxyScore)),
+    sourceMode: "fallback",
+  };
+}
+
+function extractCloseSeries(payload: unknown): number[] {
+  const closes = (payload as {
+    chart?: {
+      result?: Array<{
+        indicators?: {
+          quote?: Array<{
+            close?: Array<number | null>;
+          }>;
+        };
+      }>;
+    };
+  })?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+  return Array.isArray(closes)
+    ? closes.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    : [];
+}
+
+function buildIndexTrendSummary(label: string, payload: unknown) {
+  const closes = extractCloseSeries(payload);
+  if (closes.length < 2) return null;
+  const first = closes[0];
+  const last = closes[closes.length - 1];
+  const changePct = first > 0 ? ((last - first) / first) * 100 : 0;
+  const tone = changePct >= 0.4 ? "偏多" : changePct <= -0.4 ? "偏空" : "震荡";
+  return `${label} ${tone} ${changePct.toFixed(2)}%`;
+}
+
+function buildNewsSummary(payload: unknown) {
+  const sigDevs = (payload as { finance?: { result?: { sigDevs?: Array<{ headline?: string; story?: string }> } } })?.finance?.result?.sigDevs ?? [];
+  if (!Array.isArray(sigDevs) || sigDevs.length === 0) return null;
+  return sigDevs.slice(0, 2).map(item => item.headline ?? item.story ?? "外部事件信号").join("；");
+}
+
+async function loadMacroContext(signal: ReturnType<typeof listSignals>[number], frame: ReturnType<typeof getSignalStrategyFrame>): Promise<MacroContextSnapshot> {
+  const cached = macroContextCache.get(signal.symbol);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const fallback = fallbackMacroContext(signal, frame);
+  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+    macroContextCache.set(signal.symbol, { expiresAt: Date.now() + 10 * 60 * 1000, value: fallback });
+    return fallback;
+  }
+
+  try {
+    const [insightsResult, hsiResult, hstechResult] = await Promise.allSettled([
+      callDataApi("YahooFinance/get_stock_insights", { query: { symbol: `${signal.symbol}.HK` } }),
+      callDataApi("YahooFinance/get_stock_chart", { query: { symbol: "^HSI", interval: "5m", range: "1d" } }),
+      callDataApi("YahooFinance/get_stock_chart", { query: { symbol: "^HSTECH", interval: "5m", range: "1d" } }),
+    ]);
+
+    const indexSummaryParts = [
+      hsiResult.status === "fulfilled" ? buildIndexTrendSummary("HSI", hsiResult.value) : null,
+      hstechResult.status === "fulfilled" ? buildIndexTrendSummary("HSTECH", hstechResult.value) : null,
+    ].filter(Boolean) as string[];
+    const newsSummary = insightsResult.status === "fulfilled" ? buildNewsSummary(insightsResult.value) : null;
+    const indexToneAdjustment = indexSummaryParts.join(" ").includes("偏多")
+      ? 4
+      : indexSummaryParts.join(" ").includes("偏空")
+        ? -4
+        : 0;
+    const sentimentScore = Math.max(
+      -99,
+      Math.min(
+        99,
+        Math.round((frame?.eventScore ?? 0) + signal.quoteChangePct * 5 + indexToneAdjustment),
+      ),
+    );
+    const value: MacroContextSnapshot = {
+      marketRegime: sentimentScore >= 6 ? "宏观风险偏好多头" : sentimentScore <= -6 ? "宏观风险偏好偏空" : "宏观风险偏好中性",
+      indexSummary: indexSummaryParts.length > 0 ? indexSummaryParts.join("；") : fallback.indexSummary,
+      newsSummary: newsSummary ?? fallback.newsSummary,
+      sentimentScore,
+      sourceMode: indexSummaryParts.length > 0 || !!newsSummary ? "external" : "fallback",
+    };
+    macroContextCache.set(signal.symbol, { expiresAt: Date.now() + 10 * 60 * 1000, value });
+    return value;
+  } catch {
+    macroContextCache.set(signal.symbol, { expiresAt: Date.now() + 10 * 60 * 1000, value: fallback });
+    return fallback;
+  }
+}
+
 async function ensureDashboardForecastInsights(userId: number) {
   const scopedSignals = listScopedSignals(userId).slice(0, 4);
 
@@ -88,16 +196,18 @@ async function ensureDashboardForecastInsights(userId: number) {
     if (signal.llmInterpretation && signal.llmForecastSummary && isFresh) continue;
 
     try {
+      const strategyFrame = getSignalStrategyFrame(userId, signal.id);
+      const macroContext = await loadMacroContext(signal, strategyFrame);
       const response = await invokeLLM({
         messages: [
           {
             role: "system",
             content:
-              "你是一名严谨的盘中交易策略助理。请基于给定信号，为仪表板生成结构化中文输出，必须简洁、可执行、避免收益承诺。forecast_slope 使用 -1 到 1 之间的小数，正数代表偏多上行，负数代表偏空下行。forecast_confidence 使用 55 到 98 的整数。",
+              "你是一名严谨的盘中交易策略助理，正在输出 VTA + 量化执行 + 强化反馈混合策略摘要。必须给出中文结构化结果，避免收益承诺。interpretation 必须清楚交代三层来源：VTA 时间序列注释、量化执行层、强化反馈层。forecast_slope 使用 -1 到 1 之间的小数，正数代表偏多上行，负数代表偏空下行。forecast_confidence 使用 55 到 98 的整数。",
           },
           {
             role: "user",
-            content: `请为以下信号生成预测与策略摘要：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n风险等级：${signal.riskLevel}\n执行前提：${signal.executionPrerequisite}\n方向：${signal.direction}\n触发动作：${signal.triggerAction}\n触发价位：${signal.triggerPrice}\n止损价位：${signal.stopLossPrice ?? signal.stopLoss}\n失效条件：${signal.invalidationCondition}\n当前价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}\n策略学习状态：${signal.learningStatus}\n历史收益：${signal.realizedReturnPct ?? "暂无"}%\n不利波动：${signal.adverseMovePct ?? "暂无"}%`,
+            content: `请为以下信号生成预测与策略摘要：\n市场：${signal.market}\n标的：${signal.symbol}\n信号：${signal.signalType}\n评分：${signal.score}\n触发原因：${signal.triggerReason}\n风险标签：${signal.riskTags.join("、")}\n风险等级：${signal.riskLevel}\n执行前提：${signal.executionPrerequisite}\n方向：${signal.direction}\n触发动作：${signal.triggerAction}\n触发价位：${signal.triggerPrice}\n止损价位：${signal.stopLossPrice ?? signal.stopLoss}\n失效条件：${signal.invalidationCondition}\n当前价格：${signal.quotePrice}\n涨跌幅：${signal.quoteChangePct}%\n成交量：${signal.quoteVolume}\n策略学习状态：${signal.learningStatus}\n历史收益：${signal.realizedReturnPct ?? "暂无"}%\n不利波动：${signal.adverseMovePct ?? "暂无"}%\n\nVTA 注释：\n${strategyFrame?.vtaAnnotations.map(item => `- ${item}`).join("\n") ?? "- 当前暂无足够分时样本，优先参考实时价与风险位。"}\n\n结构摘要：${strategyFrame?.structureSummary ?? "暂无结构摘要"}\n事件语境：${strategyFrame?.eventContextSummary ?? "暂无事件语境摘要"}\n强化反馈：${strategyFrame?.reinforcementSummary ?? "暂无强化反馈摘要"}\n宏观市场状态：${macroContext.marketRegime}\n指数语境：${macroContext.indexSummary}\n新闻/事件输入：${macroContext.newsSummary}\n语境情绪分：${macroContext.sentimentScore}\n语境来源：${macroContext.sourceMode}`,
           },
         ],
         response_format: {
@@ -207,11 +317,14 @@ export const appRouter = router({
       return listScopedSignals(ctx.user.id).map(signal => {
         const matchedSecurity = watchlistMap.get(`${signal.market}:${signal.symbol}`) ?? null;
         const matchedName = matchedSecurity?.name ?? signal.symbol;
+        const signalDetails = describeSignal(ctx.user.id, signal.id);
         return {
           ...signal,
           name: matchedName,
           securityLabel: `${signal.symbol} · ${matchedName}`,
           identityKey: `${signal.market}:${signal.symbol}`,
+          reasoning: signalDetails?.reasoning ?? null,
+          parameterFeedback: signalDetails?.parameterFeedback ?? null,
           suggestion: createStructuredSuggestion({
             signalType: signal.signalType,
             direction: signal.direction,
@@ -287,6 +400,19 @@ export const appRouter = router({
   }),
   review: router({
     latest: protectedProcedure.query(({ ctx }) => getLatestReview(ctx.user.id)),
+  }),
+  strategy: router({
+    simulatedTrades: protectedProcedure
+      .input(
+        z.object({
+          market: marketSchema.optional(),
+          symbol: z.string().min(1).max(32).optional(),
+        }).optional()
+      )
+      .query(({ ctx, input }) => buildSimulatedTrades(ctx.user.id, input).map(trade => ({
+        ...trade,
+        signalDetails: describeSignal(ctx.user.id, trade.signalId),
+      }))),
   }),
   settings: router({
     get: protectedProcedure.query(({ ctx }) => getSettings(ctx.user.id)),

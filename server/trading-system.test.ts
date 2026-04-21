@@ -427,7 +427,57 @@ describe("trading signal monitoring system", () => {
     });
     expect(overview.strategyLearning).toMatchObject({
       successRate: expect.any(Number),
+      rewardScore: expect.any(Number),
+      sharpeLikeScore: expect.any(Number),
       adaptiveWeight: expect.any(Number),
+    });
+    expect(overview.liveBoard[0]?.strategyLearning).toMatchObject({
+      rewardScore: expect.any(Number),
+      sharpeLikeScore: expect.any(Number),
+    });
+    expect(overview.liveBoard[0]?.simulationSummary).toMatchObject({
+      averageRewardScore: expect.any(Number),
+    });
+  });
+
+  it("returns strategy simulated trades with pnl, drawdown, holding time, and explanation fields", async () => {
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["03690", "09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 38.9,
+          volume: 14600000,
+          turnover: 538000000,
+          openPrice: 36.9,
+          highPrice: 39.1,
+          lowPrice: 36.8,
+          prevClosePrice: 36.1,
+        },
+      ],
+    });
+
+    const { appRouter } = await import("./routers");
+    const caller = appRouter.createCaller(createAuthContext());
+    const trades = await caller.strategy.simulatedTrades({ market: "HK", symbol: "09992" });
+
+    expect(trades.length).toBeGreaterThan(0);
+    expect(trades[0]).toMatchObject({
+      symbol: "09992",
+      securityLabel: "09992 · 泡泡玛特",
+      action: expect.stringMatching(/BUY|SELL/),
+      entryPrice: expect.any(Number),
+      simulatedExitPrice: expect.any(Number),
+      realizedPnlPct: expect.any(Number),
+      maxDrawdownPct: expect.any(Number),
+      holdingMinutes: expect.any(Number),
+      rewardScore: expect.any(Number),
+      explanation: expect.any(String),
     });
   });
 

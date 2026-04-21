@@ -27,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
-import { Area, AreaChart, CartesianGrid, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts";
+import { Area, CartesianGrid, ComposedChart, Line, ReferenceDot, ReferenceLine, XAxis, YAxis } from "recharts";
 
 type Market = "US" | "HK";
 type SignalType = "突破啟動" | "回踩續強" | "盤口失衡" | "冲高衰竭";
@@ -214,283 +214,294 @@ function EmptyState({ title, description }: { title: string; description: string
 
 export function DashboardPage() {
   const { overview } = useTradingWorkspaceData();
+  const [activeSymbol, setActiveSymbol] = useState("03690");
+
+  const liveBoard = overview.data?.liveBoard ?? [];
+  const activeBoard = useMemo(() => {
+    return liveBoard.find((item: any) => item.symbol === activeSymbol) ?? liveBoard[0] ?? null;
+  }, [activeSymbol, liveBoard]);
+
+  useEffect(() => {
+    if (!activeBoard && liveBoard[0]?.symbol) {
+      setActiveSymbol(liveBoard[0].symbol);
+      return;
+    }
+    if (activeBoard && activeSymbol !== activeBoard.symbol) {
+      setActiveSymbol(activeBoard.symbol);
+    }
+  }, [activeBoard, activeSymbol, liveBoard]);
+
+  const tradeFilter = useMemo(() => {
+    if (!activeBoard) return undefined;
+    return {
+      market: activeBoard.market as Market,
+      symbol: activeBoard.symbol as string,
+    };
+  }, [activeBoard]);
+
+  const simulatedTrades = trpc.strategy.simulatedTrades.useQuery(tradeFilter, {
+    refetchInterval: 4000,
+    refetchOnWindowFocus: true,
+    enabled: !!tradeFilter,
+  });
 
   if (overview.isLoading) {
     return <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="正在汇总实时行情、市场状态与信号摘要。"><EmptyState title="加载中" description="系统正在建立实时观察环境。" /></BlueprintPageShell>;
   }
 
   const data = overview.data;
-  if (!data) {
+  if (!data || !activeBoard) {
     return <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="暂无可用数据。"><EmptyState title="暂无数据" description="请稍后刷新，或先在观察名單中添加标的。" /></BlueprintPageShell>;
   }
 
-  const liveAlerts = (data.latestSignals ?? []).filter((signal: any) => signal.triggerAction === "买入提醒" || signal.triggerAction === "卖出提醒");
+  const trades = simulatedTrades.data ?? [];
 
   return (
-      <BlueprintPageShell
-        eyebrow="Dashboard"
-        title="市场终端与指令仪表板"
-        description="主面板改为更接近真实股票软件的市场终端视图：优先展示代码、名称、分时走势、开高低收与成交信息，只在关键位置叠加买卖、止损与失效提醒，避免让指令遮住行情本身。"
-        workspaceLabel={data.liveBridge.sourceLabel}
-      >
-
-      <div className="grid gap-4 lg:grid-cols-4">
-        <MetricCard label="当前观察名單" value={String(data.watchlist.length)} detail="仅展示已选跟踪标的" accent="border-cyan-200 bg-cyan-50 text-cyan-800" />
-        <MetricCard label="高评分机会" value={String(data.highScoreCount)} detail={`达到 ${data.liveBridge.useLiveQuotes ? "实时" : "演示"} 通知阈值`} accent="border-pink-200 bg-pink-50 text-pink-800" />
-        <MetricCard label="策略学习命中率" value={`${data.strategyLearning.successRate}%`} detail={`${data.strategyLearning.evaluatedCount} 条已评估建议`} accent="border-slate-200 bg-slate-50 text-slate-700" />
-        <MetricCard label="当日命中率" value={`${data.hitRate}%`} detail="盘后复盘统计" accent="border-cyan-200 bg-cyan-50 text-cyan-800" />
+    <BlueprintPageShell
+      eyebrow="Dashboard"
+      title="双标实时终端"
+      description="主图优先，只保留实时决策必要信息：代码、现价、BUY / SELL 覆盖点、预测线与下方模拟 P&L 验证区。"
+      workspaceLabel={data.liveBridge.sourceLabel}
+    >
+      <div className="flex flex-wrap items-center gap-3 rounded-[1.4rem] border border-slate-200 bg-white/82 px-4 py-3 text-sm text-slate-600 shadow-[0_18px_60px_-42px_rgba(15,23,42,0.25)]">
+        <MarketPill market="HK" status={data.marketStatus.HK} />
+        <div className={`rounded-full border px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] ${bridgeStatusTone(data.liveBridge.connectionStatus)}`}>
+          桥接状态 · {data.liveBridge.connectionStatus}
+        </div>
+        <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] text-slate-600">
+          已选 · {data.liveBridge.trackedSymbols.join(" · ")}
+        </div>
+        <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] text-slate-600">
+          最近更新 · {formatDateTime(data.liveBridge.lastQuoteAt)}
+        </div>
       </div>
 
-      <Card className="border-white/80 bg-white/92 shadow-[0_24px_90px_-48px_rgba(15,23,42,0.35)]">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><CandlestickChart className="h-5 w-5 text-cyan-700" />市场主屏</CardTitle>
-          <CardDescription>以更接近交易终端的方式展示已选标的行情，只在右侧叠加当前动作指令与风控条件。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {data.liveBoard.map((item: any) => (
-            <div key={`${item.identityKey}-terminal`} className="grid gap-3 rounded-[1.4rem] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))] p-4 xl:grid-cols-[1.25fr_1.4fr_0.95fr]">
-              <div className="space-y-2">
+      <div className="grid gap-4 xl:grid-cols-[1fr_19rem]">
+        <Card className="overflow-hidden border-slate-800/90 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)] xl:col-span-2">
+          <CardHeader className="space-y-5 border-b border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(7,17,31,0.99))] pb-5">
+            <div className="flex flex-wrap items-center gap-3">
+              {liveBoard.map((item: any) => (
+                <button
+                  key={item.identityKey}
+                  type="button"
+                  onClick={() => setActiveSymbol(item.symbol)}
+                  className={`rounded-2xl border px-4 py-3 text-left transition ${activeBoard.symbol === item.symbol ? "border-cyan-400/50 bg-cyan-400/10 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.15)]" : "border-slate-700 bg-slate-950/50 text-slate-300 hover:border-slate-600 hover:text-white"}`}
+                >
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.24em]">
+                    <span>{item.symbol}</span>
+                    <span className={item.sourceMode === "live" ? "text-emerald-300" : "text-amber-300"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</span>
+                  </div>
+                  <div className="mt-1 text-sm font-semibold">{item.name}</div>
+                  <div className={`mt-1 text-xs ${item.changePct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(item.changePct)}</div>
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+              <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline" className="font-mono text-[11px]">{item.market}</Badge>
-                  <Badge variant="outline" className={item.sourceMode === "live" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "font-mono"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>
-                  {item.activeSignalType ? <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-700">{item.activeSignalType}</Badge> : null}
+                  <Badge variant="outline" className="border-slate-700 bg-slate-900/60 font-mono text-[11px] text-slate-200">{activeBoard.market}</Badge>
+                  <Badge variant="outline" className={activeBoard.forecastSummary.trendBias === "偏多" ? "border-cyan-500/40 bg-cyan-500/10 font-mono text-cyan-300" : "border-pink-500/40 bg-pink-500/10 font-mono text-pink-300"}>{activeBoard.forecastSummary.trendBias}</Badge>
+                  {activeBoard.activeSignalType ? <Badge variant="outline" className="border-slate-700 bg-slate-900/50 font-mono text-slate-300">{activeBoard.activeSignalType}</Badge> : null}
                 </div>
                 <div>
-                  <div className="text-2xl font-black tracking-[-0.04em] text-slate-900">{item.securityLabel}</div>
-                  <div className="mt-1 text-sm text-slate-500">最新价 {formatNumber(item.lastPrice)} · 涨跌 {formatSigned(item.changePct)}</div>
+                  <CardTitle className="text-4xl font-black tracking-[-0.05em] text-white">{activeBoard.securityLabel}</CardTitle>
+                  <CardDescription className="mt-2 max-w-4xl text-sm leading-7 text-slate-300">{activeBoard.llmForecastSummary}</CardDescription>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">开</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.openPrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">高</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.highPrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">低</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.lowPrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">昨收</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.prevClosePrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">量</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.volume)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-white/90 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">额</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.turnover)}</div></div>
-              </div>
-              <div className={`rounded-[1.3rem] border px-4 py-3 ${item.suggestionAction === "买入提醒" ? "border-cyan-200 bg-cyan-50/85" : item.suggestionAction === "卖出提醒" ? "border-pink-200 bg-pink-50/85" : "border-slate-200 bg-slate-50/85"}`}>
-                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">指令覆盖</div>
-                <div className="mt-2 text-lg font-black text-slate-900">{item.suggestionAction ?? "观察中"}</div>
-                <div className="mt-2 text-sm leading-6 text-slate-600">触发 {item.suggestionTriggerPrice ?? "--"} · 止损 {item.suggestionStopLossPrice ?? "--"}</div>
-                <div className="mt-2 text-sm leading-6 text-slate-600">{item.executionPrerequisite}</div>
+              <div className="grid gap-3 sm:grid-cols-4 xl:min-w-[38rem]">
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">最新价</div>
+                  <div className="mt-2 text-4xl font-black tracking-[-0.05em] text-white">{formatNumber(activeBoard.lastPrice)}</div>
+                  <div className={`mt-2 text-sm ${activeBoard.changePct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.changePct)}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">BUY</div>
+                  <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-emerald-300">{activeBoard.suggestionAction === "买入提醒" && activeBoard.suggestionTriggerPrice !== null ? formatNumber(activeBoard.suggestionTriggerPrice) : "--"}</div>
+                  <div className="mt-2 text-sm text-slate-400">失效 {activeBoard.suggestionAction === "买入提醒" && activeBoard.suggestionStopLossPrice !== null ? formatNumber(activeBoard.suggestionStopLossPrice) : "--"}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">SELL</div>
+                  <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-rose-300">{activeBoard.suggestionAction === "卖出提醒" && activeBoard.suggestionTriggerPrice !== null ? formatNumber(activeBoard.suggestionTriggerPrice) : "--"}</div>
+                  <div className="mt-2 text-sm text-slate-400">失效 {activeBoard.suggestionAction === "卖出提醒" && activeBoard.suggestionStopLossPrice !== null ? formatNumber(activeBoard.suggestionStopLossPrice) : "--"}</div>
+                </div>
+                <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">RL 权重</div>
+                  <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-cyan-300">{activeBoard.strategyLearning.adaptiveWeight}x</div>
+                  <div className="mt-2 text-sm text-slate-400">奖励 {activeBoard.strategyLearning.rewardScore}</div>
+                </div>
               </div>
             </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.9fr]">
-        <Card className="border-white/80 bg-white/90 shadow-[0_22px_80px_-40px_rgba(14,116,144,0.5)]">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><Bell className="h-5 w-5 text-pink-700" />即时动作指令</CardTitle>
-            <CardDescription>把最需要立即关注的买入 / 卖出提醒提升到首页最高视觉优先级。</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {liveAlerts.length > 0 ? liveAlerts.map((signal: any) => (
-              <div key={signal.id} className={`rounded-[1.4rem] border px-4 py-4 ${signal.triggerAction === "买入提醒" ? "border-cyan-200 bg-cyan-50/75" : "border-pink-200 bg-pink-50/75"}`}>
-                <div className="grid gap-3 xl:grid-cols-[1.05fr_0.85fr]">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="font-mono text-[11px]">{signal.market}</Badge>
-                      <Badge variant="outline" className={signal.triggerAction === "买入提醒" ? "border-cyan-200 bg-white font-mono text-cyan-800" : "border-pink-200 bg-white font-mono text-pink-700"}>{signal.triggerAction}</Badge>
-                      <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-600">{signal.signalType}</Badge>
-                    </div>
-                    <div className="mt-3 text-2xl font-black tracking-[-0.04em] text-slate-900">{signal.securityLabel}</div>
-                    <div className="mt-1 text-sm text-slate-500">现价 {formatNumber(signal.quotePrice)} · 学习状态 {signal.learningStatus}</div>
-                    <p className="mt-3 text-sm leading-6 text-slate-600">{signal.llmForecastSummary ?? signal.triggerReason}</p>
+
+          <CardContent className="space-y-5 p-4 xl:p-5">
+            <div className="rounded-[1.75rem] border border-slate-800 bg-[radial-gradient(circle_at_top,rgba(15,23,42,0.95),rgba(2,6,23,0.98))] p-4 xl:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1">开 {formatNumber(activeBoard.openPrice)}</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1">高 {formatNumber(activeBoard.highPrice)}</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1">低 {formatNumber(activeBoard.lowPrice)}</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1">量 {formatNumber(activeBoard.volume)}</span>
+                </div>
+                <div className="font-mono tracking-[0.3em] text-slate-500">REALTIME TRADING TERMINAL</div>
+              </div>
+              <ChartContainer
+                className="h-[480px] w-full"
+                config={{
+                  price: { label: "实时价格", color: "#38bdf8" },
+                  forecastPrice: { label: "预测走势线", color: "#f97316" },
+                }}
+              >
+                <ComposedChart data={activeBoard.chart} margin={{ left: 8, right: 16, top: 12, bottom: 8 }}>
+                  <CartesianGrid vertical stroke="rgba(148,163,184,0.12)" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                  <YAxis orientation="right" tickLine={false} axisLine={false} domain={["dataMin - 1", "dataMax + 1"]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                  <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
+                  <ReferenceLine y={activeBoard.lastPrice} stroke="rgba(226,232,240,0.35)" strokeDasharray="5 5" />
+                  {activeBoard.suggestionTriggerPrice ? (
+                    <ReferenceLine
+                      y={activeBoard.suggestionTriggerPrice}
+                      stroke={activeBoard.suggestionAction === "卖出提醒" ? "#fb7185" : "#4ade80"}
+                      strokeDasharray="6 6"
+                      label={{ value: `${activeBoard.suggestionAction === "卖出提醒" ? "SELL" : "BUY"} ${activeBoard.suggestionTriggerPrice}`, position: "insideTopRight", fill: activeBoard.suggestionAction === "卖出提醒" ? "#fb7185" : "#4ade80", fontSize: 11 }}
+                    />
+                  ) : null}
+                  {activeBoard.suggestionStopLossPrice ? (
+                    <ReferenceLine
+                      y={activeBoard.suggestionStopLossPrice}
+                      stroke="#f59e0b"
+                      strokeDasharray="4 4"
+                      label={{ value: `INVALID ${activeBoard.suggestionStopLossPrice}`, position: "insideBottomRight", fill: "#fbbf24", fontSize: 11 }}
+                    />
+                  ) : null}
+                  {activeBoard.latestMarker?.label ? (
+                    <ReferenceDot
+                      x={activeBoard.latestMarker.label}
+                      y={activeBoard.latestMarker.price}
+                      r={5}
+                      fill="#e2e8f0"
+                      stroke="#020617"
+                      strokeWidth={2}
+                      label={{ value: `NOW ${formatNumber(activeBoard.latestMarker.price)}`, position: "right", fill: "#e2e8f0", fontSize: 11 }}
+                    />
+                  ) : null}
+                  {(activeBoard.simulationMarkers ?? []).map((marker: any, markerIndex: number) => (
+                    <ReferenceDot
+                      key={`${activeBoard.identityKey}-simulation-${markerIndex}`}
+                      x={marker.label}
+                      y={marker.price}
+                      r={6}
+                      fill={marker.tone === "buy" ? "#4ade80" : "#fb7185"}
+                      stroke="#020617"
+                      strokeWidth={1.5}
+                      label={{ value: `${marker.action} ${formatNumber(marker.price)}`, position: marker.tone === "buy" ? "bottom" : "top", fill: marker.tone === "buy" ? "#86efac" : "#fda4af", fontSize: 11 }}
+                    />
+                  ))}
+                  <Area type="monotone" dataKey="price" stroke="#38bdf8" fill="#0ea5e9" fillOpacity={0.12} strokeWidth={2.5} connectNulls />
+                  <Line type="monotone" dataKey="forecastPrice" stroke="#f97316" strokeWidth={2.5} dot={false} strokeDasharray="7 5" connectNulls />
+                </ComposedChart>
+              </ChartContainer>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
+                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">执行与解释</div>
+                <div className={`mt-3 text-2xl font-black tracking-[-0.03em] ${activeBoard.suggestionAction === "卖出提醒" ? "text-rose-300" : activeBoard.suggestionAction === "买入提醒" ? "text-emerald-300" : "text-slate-200"}`}>{activeBoard.suggestionAction ?? "观察中"}</div>
+                <div className="mt-3 text-sm leading-6 text-slate-300">{activeBoard.executionPrerequisite}</div>
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm leading-6 text-slate-400">{activeBoard.llmStrategyNote}</div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">策略与风险</div>
+                  <div className="mt-3 grid gap-2 text-sm text-slate-300">
+                    <div className="flex items-center justify-between gap-3"><span>策略</span><span className="font-semibold text-white">{activeBoard.activeSignalType ?? "趋势跟踪"}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>风险等级</span><span className="font-semibold text-white">{activeBoard.riskLevel}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>预测终点</span><span className="font-semibold text-white">{formatNumber(activeBoard.forecastSummary.predictedPrice)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>预测变化</span><span className={activeBoard.forecastSummary.predictedChangePct >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>{formatSigned(activeBoard.forecastSummary.predictedChangePct)}</span></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-2">
-                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">评分</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.score}</div></div>
-                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">触发</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.triggerPrice}</div></div>
-                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">止损</div><div className="mt-2 text-2xl font-black text-slate-900">{signal.stopLossPrice ?? "--"}</div></div>
-                    <div className="rounded-2xl bg-white/85 p-4"><div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">涨跌幅</div><div className="mt-2 text-2xl font-black text-slate-900">{formatSigned(signal.quoteChangePct)}</div></div>
+                </div>
+                <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">强化反馈</div>
+                  {activeBoard.failureReason ? <div className="mt-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">最近失效：{activeBoard.failureReason}</div> : null}
+                  <div className="mt-3 grid gap-2 text-sm text-slate-300">
+                    <div className="flex items-center justify-between gap-3"><span>平均收益</span><span className="font-semibold text-white">{activeBoard.strategyLearning.averageReturnPct}%</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>平均回撤</span><span className="font-semibold text-white">{activeBoard.strategyLearning.averageAdversePct}%</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>奖励分</span><span className="font-semibold text-cyan-300">{activeBoard.strategyLearning.rewardScore}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span>Sharpe 风格</span><span className="font-semibold text-white">{activeBoard.strategyLearning.sharpeLikeScore}</span></div>
                   </div>
                 </div>
               </div>
-            )) : (
-              <EmptyState title="暂无即时动作提醒" description="当前观察标的尚未触发明确买卖点，系统仍会持续刷新预测走势与策略建议。" />
-            )}
+            </div>
+
+            <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 font-semibold text-white"><TrendingUp className="h-4 w-4 text-cyan-300" />模拟 P&L 验证面板</div>
+                  <div className="mt-1 text-sm text-slate-400">逐笔回放 {activeBoard.securityLabel} 的 BUY / SELL 触发，验证入场、出场、回撤、奖励分与失效原因。</div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-5">
+                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">交易笔数</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.tradeCount}</span></div>
+                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">持仓中</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.openCount}</span></div>
+                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">浮动收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.floatingPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.floatingPnlPct)}</span></div>
+                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">已实现收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.realizedPnlPct)}</span></div>
+                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">最大回撤</span><span className="mt-2 block text-xl font-black text-white">{formatNumber(activeBoard.simulationSummary.maxDrawdownPct)}%</span></div>
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-hidden rounded-[1.25rem] border border-slate-800 bg-[#08101d]">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-950/70">
+                      <tr>
+                        {[
+                          "时间",
+                          "触发",
+                          "入场",
+                          "出场",
+                          "P&L",
+                          "回撤",
+                          "持有",
+                          "奖励",
+                          "状态 / 失效",
+                        ].map(header => (
+                          <th key={header} className="px-4 py-3 text-left font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{header}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trades.length > 0 ? trades.slice(0, 8).map((trade: any) => (
+                        <tr key={`${trade.identityKey}-${trade.signalId}`} className="border-t border-slate-800 text-slate-300">
+                          <td className="px-4 py-3 whitespace-nowrap">{trade.entryTimeLabel}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className={`rounded-full px-2.5 py-1 font-mono text-xs ${trade.action === "BUY" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{trade.action}</span>
+                              <span className="text-xs text-slate-400">{trade.signalType}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.entryPrice)}</td>
+                          <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.simulatedExitPrice)}</td>
+                          <td className={`px-4 py-3 font-semibold ${trade.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(trade.realizedPnlPct)}</td>
+                          <td className="px-4 py-3">{formatNumber(trade.maxDrawdownPct)}%</td>
+                          <td className="px-4 py-3">{trade.holdingMinutes}m</td>
+                          <td className={`px-4 py-3 font-semibold ${trade.rewardScore >= 0 ? "text-cyan-300" : "text-amber-300"}`}>{trade.rewardScore}</td>
+                          <td className="px-4 py-3 text-xs leading-6 text-slate-400">{trade.invalidationReason ?? trade.failureReason ?? trade.explanation}</td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-400">当前尚未形成可回放的模拟交易记录。实时桥接继续推送后，这里会展示入场、出场、P&L、回撤与失效原因。</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
-
-        <Card className="border-white/80 bg-white/90">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><Bot className="h-5 w-5 text-cyan-700" />策略自优化引擎</CardTitle>
-            <CardDescription>系统会根据历史买卖建议表现，持续调整信号权重与提醒强度。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
-              <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
-                <div className="font-mono text-xs uppercase tracking-[0.24em] text-cyan-700">Adaptive Weight</div>
-                <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-slate-900">{data.strategyLearning.adaptiveWeight}x</div>
-                <p className="mt-2 text-sm text-slate-600">系统已根据历史建议表现，对未来评分与预测线斜率做动态校正。</p>
-              </div>
-              <div className="rounded-2xl border border-pink-200 bg-pink-50/70 p-4">
-                <div className="font-mono text-xs uppercase tracking-[0.24em] text-pink-700">近期偏差</div>
-                <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-slate-900">{data.strategyLearning.averageAdversePct}%</div>
-                <p className="mt-2 text-sm text-slate-600">平均不利波动越低，后续相同类型信号会得到更高策略权重。</p>
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm leading-7 text-slate-600">
-              当前最强策略类型为 <span className="font-semibold text-slate-900">{data.strategyLearning.strongestSignalType}</span>，
-              当前最需要谨慎修正的类型为 <span className="font-semibold text-slate-900">{data.strategyLearning.weakestSignalType}</span>。
-              系统会把历史建议的命中、失效与回撤结果纳入后续预测走势线和实时评分中。
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <MarketPill market="US" status={data.marketStatus.US} />
-              <MarketPill market="HK" status={data.marketStatus.HK} />
-              <div className={`rounded-full border px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] ${bridgeStatusTone(data.liveBridge.connectionStatus)}`}>
-                桥接状态 · {data.liveBridge.connectionStatus}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-600">
-              <div>桥接地址：{data.liveBridge.opendHost}:{data.liveBridge.opendPort}</div>
-              <div className="mt-2">已选跟踪：{data.liveBridge.trackedSymbols.join(" · ")}</div>
-              <div className="mt-2">最近行情更新：{formatDateTime(data.liveBridge.lastQuoteAt)}</div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="space-y-4">
-        {data.liveBoard.map((item: any) => (
-          <Card key={`${item.market}-${item.symbol}`} className="border-white/80 bg-white/92 shadow-[0_24px_90px_-48px_rgba(15,23,42,0.32)]">
-            <CardHeader className="space-y-4">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline" className="font-mono text-[11px]">{item.market}</Badge>
-                    <Badge variant="outline" className={item.sourceMode === "live" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "font-mono"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>
-                    <Badge variant="outline" className={item.forecastSummary.trendBias === "偏多" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "border-pink-200 bg-pink-50 font-mono text-pink-700"}>{item.forecastSummary.trendBias}</Badge>
-                    {item.activeSignalType ? <Badge variant="outline" className="border-slate-200 bg-white font-mono text-slate-700">{item.activeSignalType}</Badge> : null}
-                  </div>
-                  <div>
-                    <CardTitle className="text-3xl font-black tracking-[-0.04em] text-slate-900">{item.securityLabel}</CardTitle>
-                    <CardDescription className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">{item.llmStrategyNote}</CardDescription>
-                  </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[24rem]">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">最新价</div>
-                    <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-slate-900">{formatNumber(item.lastPrice)}</div>
-                    <div className={`mt-2 text-sm ${item.changePct >= 0 ? "text-cyan-700" : "text-pink-700"}`}>{formatSigned(item.changePct)}</div>
-                  </div>
-                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-cyan-700">预测终点</div>
-                    <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-slate-900">{item.forecastSummary.predictedPrice}</div>
-                    <div className={`mt-2 text-sm ${item.forecastSummary.predictedChangePct >= 0 ? "text-cyan-700" : "text-pink-700"}`}>{formatSigned(item.forecastSummary.predictedChangePct)}</div>
-                  </div>
-                  <div className="rounded-2xl border border-pink-200 bg-pink-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-pink-700">预测置信度</div>
-                    <div className="mt-2 text-3xl font-black tracking-[-0.04em] text-slate-900">{item.forecastSummary.confidence}</div>
-                    <div className="mt-2 text-sm text-slate-600">{item.llmForecastBias} · 历史建议自适应修正后</div>
-                  </div>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">代码</div><div className="mt-1 text-lg font-black text-slate-900">{item.symbol}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">名称</div><div className="mt-1 text-lg font-black text-slate-900">{item.name}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">开 / 高</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.openPrice)} / {formatNumber(item.highPrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">低 / 昨收</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.lowPrice)} / {formatNumber(item.prevClosePrice)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">成交量</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.volume)}</div></div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3"><div className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">成交额</div><div className="mt-1 text-lg font-black text-slate-900">{formatNumber(item.turnover)}</div></div>
-              </div>
-              <div className="rounded-[1.75rem] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(241,245,249,0.9))] p-4">
-                <ChartContainer
-                  className="h-[320px] w-full"
-                  config={{
-                    price: { label: "实时价格", color: "#06b6d4" },
-                    forecastPrice: { label: "预测走势线", color: "#ec4899" },
-                  }}
-                >
-                  <AreaChart data={item.chart} margin={{ left: 12, right: 12, top: 16, bottom: 4 }}>
-                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                    <YAxis tickLine={false} axisLine={false} domain={["dataMin - 1", "dataMax + 1"]} />
-                    <ChartTooltip content={<ChartTooltipContent indicator="line" />} />
-                    {item.suggestionTriggerPrice ? <ReferenceLine y={item.suggestionTriggerPrice} stroke="#06b6d4" strokeDasharray="6 6" label={{ value: `触发 ${item.suggestionTriggerPrice}`, position: "insideTopRight", fill: "#0891b2", fontSize: 11 }} /> : null}
-                    {item.suggestionStopLossPrice ? <ReferenceLine y={item.suggestionStopLossPrice} stroke="#ec4899" strokeDasharray="4 4" label={{ value: `止损 ${item.suggestionStopLossPrice}`, position: "insideBottomRight", fill: "#be185d", fontSize: 11 }} /> : null}
-                    {item.latestMarker?.label ? <ReferenceDot x={item.latestMarker.label} y={item.latestMarker.price} r={5} fill="#0f172a" stroke="#ffffff" strokeWidth={2} /> : null}
-                    {item.triggerMarker?.label ? <ReferenceDot x={item.triggerMarker.label} y={item.triggerMarker.price} r={6} fill="#06b6d4" stroke="#ffffff" strokeWidth={2} /> : null}
-                    <Area type="monotone" dataKey="price" stroke="#06b6d4" fill="#67e8f9" fillOpacity={0.16} strokeWidth={3} connectNulls />
-                    <Line type="monotone" dataKey="forecastPrice" stroke="#ec4899" strokeWidth={3} dot={false} strokeDasharray="7 5" connectNulls />
-                  </AreaChart>
-                </ChartContainer>
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="rounded-full border border-slate-200 bg-white px-3 py-1">黑点：最新价 marker</span>
-                <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-cyan-800">青点：触发点 marker</span>
-                <span className="rounded-full border border-pink-200 bg-pink-50 px-3 py-1 text-pink-700">粉虚线：止损位</span>
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">当前策略</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{item.activeSignalType ?? "趋势跟踪"}</div>
-                  </div>
-                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-cyan-700">执行动作</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{item.suggestionAction ?? "观察中"}</div>
-                  </div>
-                  <div className="rounded-2xl border border-pink-200 bg-pink-50/80 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-pink-700">触发价位</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{item.suggestionTriggerPrice ?? "--"}</div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">失效 / 止损</div>
-                    <div className="mt-2 text-xl font-black tracking-[-0.03em] text-slate-900">{item.suggestionStopLossPrice ?? "--"}</div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">执行前提</div>
-                    <div className="mt-2 text-sm leading-6 text-slate-700">{item.executionPrerequisite}</div>
-                  </div>
-                  <div className="rounded-2xl border border-pink-200 bg-pink-50/70 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-pink-700">风险等级</div>
-                    <div className="mt-2 text-2xl font-black tracking-[-0.03em] text-slate-900">{item.riskLevel}</div>
-                  </div>
-                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-cyan-700">LLM 预测摘要</div>
-                    <div className="mt-2 text-sm leading-6 text-slate-700">{item.llmForecastSummary}</div>
-                  </div>
-                </div>
-
-                <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50/80 p-4">
-                  <div className="flex items-center gap-2 font-semibold text-slate-900"><TrendingUp className="h-4 w-4 text-cyan-700" />策略学习反馈</div>
-                  {item.failureReason ? <div className="mt-3 rounded-2xl border border-pink-200 bg-pink-50/70 px-4 py-3 text-sm text-pink-900">最近失效原因：{item.failureReason}</div> : null}
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl bg-white/90 p-4">
-                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">命中率</div>
-                      <div className="mt-2 text-2xl font-black tracking-[-0.04em] text-slate-900">{item.strategyLearning.successRate}%</div>
-                    </div>
-                    <div className="rounded-2xl bg-white/90 p-4">
-                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">当前权重</div>
-                      <div className="mt-2 text-2xl font-black tracking-[-0.04em] text-slate-900">{item.strategyLearning.adaptiveWeight}x</div>
-                    </div>
-                    <div className="rounded-2xl bg-white/90 p-4">
-                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">平均收益</div>
-                      <div className="mt-2 text-2xl font-black tracking-[-0.04em] text-slate-900">{item.strategyLearning.averageReturnPct}%</div>
-                    </div>
-                    <div className="rounded-2xl bg-white/90 p-4">
-                      <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">平均不利波动</div>
-                      <div className="mt-2 text-2xl font-black tracking-[-0.04em] text-slate-900">{item.strategyLearning.averageAdversePct}%</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
       </div>
     </BlueprintPageShell>
   );
 }
+
 
 export function WatchlistPage() {
   const utils = trpc.useUtils();

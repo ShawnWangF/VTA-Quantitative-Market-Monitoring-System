@@ -60,6 +60,76 @@ type SignalBlueprint = {
   rationale: string;
 };
 
+type SimulatedTradeRecord = {
+  signalId: number;
+  market: Market;
+  symbol: string;
+  name: string;
+  securityLabel: string;
+  identityKey: string;
+  signalType: SignalType;
+  action: "BUY" | "SELL";
+  direction: Direction;
+  entryTimeLabel: string;
+  entryTimestampMs: number;
+  exitTimeLabel: string;
+  exitTimestampMs: number;
+  holdingMinutes: number;
+  entryPrice: number;
+  currentPrice: number;
+  simulatedExitPrice: number;
+  realizedPnlPct: number;
+  unrealizedPnlPct: number;
+  maxDrawdownPct: number;
+  statusLabel: "持仓中" | "已兑现" | "已失效";
+  riskLevel: "低" | "中" | "高";
+  failureReason: string | null;
+  invalidationReason: string | null;
+  rationale: string;
+  reviewedAtMs: number | null;
+  markerLabel: string;
+  markerPrice: number;
+  markerTone: "buy" | "sell";
+  rewardScore: number;
+  explanation: string;
+  reasoning: SignalReasoningBreakdown;
+  parameterFeedback: AdaptiveParameterFeedback;
+};
+
+type SignalStrategyFrame = {
+  market: Market;
+  symbol: string;
+  name: string;
+  vtaAnnotations: string[];
+  structureSummary: string;
+  eventContextSummary: string;
+  reinforcementSummary: string;
+  eventScore: number;
+  sharpeLikeScore: number;
+  rewardScore: number;
+  adaptiveWeight: number;
+};
+
+type SignalReasoningBreakdown = {
+  macroFactor: string;
+  eventFactor: string;
+  priceActionFactor: string;
+  reinforcementFactor: string;
+  weightContribution: {
+    macro: number;
+    event: number;
+    priceAction: number;
+    reinforcement: number;
+  };
+};
+
+type AdaptiveParameterFeedback = {
+  llmBiasShift: number;
+  eventWeight: number;
+  triggerThresholdShiftPct: number;
+  stopLossBufferPct: number;
+};
+
 type LiveBridgeIngestInput = {
   bridgeToken?: string;
   opendHost: string;
@@ -348,18 +418,327 @@ function evaluateSignalOutcome(signal: SignalRecord, currentPrice: number) {
   };
 }
 
+function averageOf(values: number[]) {
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function standardDeviation(values: number[]) {
+  if (values.length <= 1) return 0;
+  const mean = averageOf(values);
+  const variance = averageOf(values.map(value => (value - mean) ** 2));
+  return Math.sqrt(variance);
+}
+
+function buildVtaAnnotationsFromHistory(item: WatchlistRecord, history: PriceHistoryPoint[], signals: SignalRecord[]) {
+  const recent = history.slice(-12);
+  if (recent.length <= 1) {
+    return [
+      `${item.symbol} 当前最新价 ${round(item.lastPrice)}，分时样本不足，暂以实时价与触发结构作为主要判断依据。`,
+      `最新涨跌幅 ${round(item.changePct)}%，系统将继续等待更多盘口轨迹补全 VTA 注释。`,
+    ];
+  }
+
+  const first = recent[0];
+  const last = recent[recent.length - 1];
+  const priceDeltaPct = first.price > 0 ? round(((last.price - first.price) / first.price) * 100, 2) : 0;
+  const volatilityPct = round(
+    recent.slice(1).reduce((sum, point, index) => sum + Math.abs(point.price - recent[index].price), 0)
+      / Math.max(recent.length - 1, 1)
+      / Math.max(last.price, 0.0001)
+      * 100,
+    2,
+  );
+  const high = Math.max(...recent.map(point => point.price));
+  const low = Math.min(...recent.map(point => point.price));
+  const lastSignal = [...signals].sort((a, b) => b.createdAtMs - a.createdAtMs)[0] ?? null;
+
+  return [
+    `${item.symbol} 最近 ${recent.length} 个采样点价格区间 ${round(low)} - ${round(high)}，净变化 ${priceDeltaPct}% 。`,
+    `${item.symbol} 分时波动强度约 ${volatilityPct}% ，当前价格位于最近区间${last.price >= (high + low) / 2 ? "上半区" : "下半区"}。`,
+    lastSignal
+      ? `最近一次有效结构来自“${lastSignal.signalType}”，触发价 ${round(lastSignal.triggerPrice)}，当前执行方向为 ${lastSignal.direction}。`
+      : `${item.symbol} 当前尚无可复用的最近信号结构，系统会优先依赖价量节奏判断。`,
+  ];
+}
+
+function deriveAdaptiveParameterFeedback(
+  workspace: TradingWorkspace,
+  market: Market,
+  symbol: string,
+  signalType: SignalType,
+): AdaptiveParameterFeedback {
+  const signalFamily = workspace.signals.filter(signal => signal.market === market && signal.symbol === symbol);
+  const typeSignals = signalFamily.filter(signal => signal.signalType === signalType);
+  const familyLearning = summarizeSignalLearning(signalFamily);
+  const typeLearning = summarizeSignalLearning(typeSignals);
+
+  return {
+    llmBiasShift: round(clamp(familyLearning.rewardScore / 10 + familyLearning.sharpeLikeScore / 5, -2.5, 2.5), 2),
+    eventWeight: clamp(round(0.96 + familyLearning.rewardScore / 40 + typeLearning.successRate / 420, 2), 0.74, 1.32),
+    triggerThresholdShiftPct: round(clamp(-(typeLearning.rewardScore / 6) - (typeLearning.successRate - 50) / 80, -1.8, 1.8), 2),
+    stopLossBufferPct: round(clamp(0.85 + familyLearning.averageAdversePct / 3.8 - familyLearning.rewardScore / 10, 0.55, 2.45), 2),
+  };
+}
+
+function deriveSignalReasoning(
+  workspace: TradingWorkspace,
+  item: WatchlistRecord,
+  signal: SignalRecord,
+  history: PriceHistoryPoint[],
+): SignalReasoningBreakdown {
+  const signalFamily = workspace.signals.filter(entry => entry.market === signal.market && entry.symbol === signal.symbol);
+  const feedback = deriveAdaptiveParameterFeedback(workspace, signal.market, signal.symbol, signal.signalType);
+  const learning = summarizeSignalLearning(signalFamily);
+  const recent = history.slice(-12);
+  const startPrice = recent[0]?.price ?? item.openPrice;
+  const endPrice = recent[recent.length - 1]?.price ?? item.lastPrice;
+  const intradayTrendPct = startPrice > 0 ? round(((endPrice - startPrice) / startPrice) * 100, 2) : signal.quoteChangePct;
+  const macroContribution = round(clamp(signal.quoteChangePct * 0.45 + feedback.eventWeight - 1, -4, 4), 2);
+  const eventContribution = round(clamp((signal.score - 70) / 10 + feedback.llmBiasShift, -4, 4), 2);
+  const priceContribution = round(clamp(intradayTrendPct * 0.9 + (signal.direction === "做空" ? -1.2 : 1.2), -4, 4), 2);
+  const reinforcementContribution = round(clamp(learning.rewardScore * 0.6 + learning.sharpeLikeScore * 0.8, -4, 4), 2);
+
+  return {
+    macroFactor: `${signal.market} ${signal.symbol} 当前采用宏观代理语境，最新涨跌幅 ${round(signal.quoteChangePct)}%，事件权重 ${feedback.eventWeight}，用于近似 HSI/HSTECH 与行业风险偏好。`,
+    eventFactor: `事件层当前以外部摘要可得性 + 价格/成交代理构成，LLM 偏向修正 ${feedback.llmBiasShift}，执行上偏向 ${signal.direction}。`,
+    priceActionFactor: `${signal.signalType} 对应的量价条件为触发价 ${round(signal.triggerPrice)}、失效条件 ${signal.invalidationCondition}，最近分时趋势 ${intradayTrendPct}% 。`,
+    reinforcementFactor: `近 ${learning.evaluatedCount} 笔验证样本的平均奖励 ${learning.rewardScore}、Sharpe 风格分数 ${learning.sharpeLikeScore}，共同推导触发阈值偏移 ${feedback.triggerThresholdShiftPct}% 与止损缓冲 ${feedback.stopLossBufferPct}%。`,
+    weightContribution: {
+      macro: macroContribution,
+      event: eventContribution,
+      priceAction: priceContribution,
+      reinforcement: reinforcementContribution,
+    },
+  };
+}
+
 function summarizeSignalLearning(signals: SignalRecord[]) {
   const evaluated = signals.filter(signal => signal.learningStatus !== "待验证" && signal.realizedReturnPct !== null);
   const successful = evaluated.filter(signal => signal.learningStatus === "已验证有效");
   const successRate = evaluated.length > 0 ? round((successful.length / evaluated.length) * 100, 1) : 0;
   const averageReturnPct = evaluated.length > 0
-    ? round(evaluated.reduce((sum, signal) => sum + (signal.realizedReturnPct ?? 0), 0) / evaluated.length, 2)
+    ? round(averageOf(evaluated.map(signal => signal.realizedReturnPct ?? 0)), 2)
     : 0;
   const averageAdversePct = evaluated.length > 0
-    ? round(evaluated.reduce((sum, signal) => sum + Math.abs(signal.adverseMovePct ?? 0), 0) / evaluated.length, 2)
+    ? round(averageOf(evaluated.map(signal => Math.abs(signal.adverseMovePct ?? 0))), 2)
     : 0;
-  const adaptiveWeight = clamp(round(0.9 + successRate / 100 * 0.18 + averageReturnPct / 50 - averageAdversePct / 80, 2), 0.82, 1.18);
-  return { evaluatedCount: evaluated.length, successRate, averageReturnPct, averageAdversePct, adaptiveWeight };
+  const rewardSeries = evaluated.map(signal => {
+    const realized = signal.realizedReturnPct ?? 0;
+    const adverse = Math.abs(signal.adverseMovePct ?? 0);
+    const statusPenalty = signal.learningStatus === "已验证失效" ? 1.15 : 0;
+    return round(realized - adverse * 0.65 - statusPenalty, 2);
+  });
+  const rewardScore = rewardSeries.length > 0 ? round(averageOf(rewardSeries), 2) : 0;
+  const rewardVolatility = rewardSeries.length > 1 ? round(standardDeviation(rewardSeries), 2) : 0;
+  const sharpeLikeScore = rewardSeries.length > 0
+    ? round(averageOf(rewardSeries) / Math.max(standardDeviation(rewardSeries), 0.75), 2)
+    : 0;
+  const adaptiveWeight = clamp(
+    round(0.94 + successRate / 420 + rewardScore / 42 + sharpeLikeScore / 18 - averageAdversePct / 120, 2),
+    0.78,
+    1.24,
+  );
+  return {
+    evaluatedCount: evaluated.length,
+    successRate,
+    averageReturnPct,
+    averageAdversePct,
+    rewardScore,
+    rewardVolatility,
+    sharpeLikeScore,
+    adaptiveWeight,
+  };
+}
+
+function buildSimulatedTradesForSymbol(item: WatchlistRecord, history: PriceHistoryPoint[], signals: SignalRecord[]): SimulatedTradeRecord[] {
+  const actionableSignals = signals
+    .filter(signal => signal.triggerAction === "买入提醒" || signal.triggerAction === "卖出提醒")
+    .sort((a, b) => a.createdAtMs - b.createdAtMs)
+    .slice(-10);
+
+  const fallbackPoint: PriceHistoryPoint = {
+    timestampMs: Date.now(),
+    label: timeLabel(Date.now()),
+    price: item.lastPrice,
+    forecastPrice: item.lastPrice,
+    volume: item.volume,
+    changePct: item.changePct,
+  };
+
+  const timeline = (history.length > 0 ? history : [fallbackPoint]).slice().sort((a, b) => a.timestampMs - b.timestampMs);
+  const vtaAnnotations = buildVtaAnnotationsFromHistory(item, history, signals);
+
+  return actionableSignals.map((signal, index) => {
+    const reasoning = deriveSignalReasoning(getWorkspace(item.userId), item, signal, history);
+    const parameterFeedback = deriveAdaptiveParameterFeedback(getWorkspace(item.userId), signal.market, signal.symbol, signal.signalType);
+    const entryPoint = timeline.find(point => point.timestampMs >= signal.createdAtMs)
+      ?? timeline[Math.min(index, timeline.length - 1)]
+      ?? timeline[timeline.length - 1]
+      ?? fallbackPoint;
+    const nextOpposite = actionableSignals.slice(index + 1).find(candidate => candidate.triggerAction !== signal.triggerAction) ?? null;
+    const exitTimestampMs = nextOpposite?.createdAtMs ?? signal.reviewedAtMs ?? timeline[timeline.length - 1]?.timestampMs ?? Date.now();
+    const exitPoint = timeline.find(point => point.timestampMs >= exitTimestampMs)
+      ?? timeline[timeline.length - 1]
+      ?? fallbackPoint;
+    const path = timeline.filter(point => point.timestampMs >= entryPoint.timestampMs && point.timestampMs <= exitPoint.timestampMs);
+    const pathPrices = path.length > 0 ? path.map(point => point.price) : [entryPoint.price, exitPoint.price];
+    const currentPrice = item.lastPrice;
+    const simulatedExitPrice = nextOpposite?.triggerPrice
+      ?? (signal.learningStatus === "待验证" ? currentPrice : round(exitPoint.price, 2));
+    const realizedPnlPct = round(
+      signal.triggerAction === "买入提醒"
+        ? ((simulatedExitPrice - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100
+        : ((signal.triggerPrice - simulatedExitPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100,
+      2,
+    );
+    const unrealizedPnlPct = round(
+      signal.triggerAction === "买入提醒"
+        ? ((currentPrice - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100
+        : ((signal.triggerPrice - currentPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100,
+      2,
+    );
+    const adverseExtreme = signal.triggerAction === "买入提醒"
+      ? Math.min(...pathPrices)
+      : Math.max(...pathPrices);
+    const maxDrawdownPct = round(
+      signal.triggerAction === "买入提醒"
+        ? Math.max(0, ((signal.triggerPrice - adverseExtreme) / Math.max(signal.triggerPrice, 0.0001)) * 100)
+        : Math.max(0, ((adverseExtreme - signal.triggerPrice) / Math.max(signal.triggerPrice, 0.0001)) * 100),
+      2,
+    );
+    const statusLabel: SimulatedTradeRecord["statusLabel"] = signal.learningStatus === "待验证" && !nextOpposite
+      ? "持仓中"
+      : signal.learningStatus === "已验证失效"
+        ? "已失效"
+        : "已兑现";
+    const rewardScore = round(
+      realizedPnlPct - maxDrawdownPct * 0.65 + (statusLabel === "已兑现" ? 0.6 : statusLabel === "已失效" ? -0.8 : 0) + (signal.score - 75) / 20,
+      2,
+    );
+    const invalidationReason = signal.failureReason
+      ?? (nextOpposite ? `后续反向 ${nextOpposite.triggerAction === "买入提醒" ? "BUY" : "SELL"} 信号出现，模拟仓位按新方向平仓。` : null);
+
+    return {
+      signalId: signal.id,
+      market: item.market,
+      symbol: item.symbol,
+      name: item.name,
+      securityLabel: `${item.symbol} · ${item.name}`,
+      identityKey: symbolKey(item.market, item.symbol),
+      signalType: signal.signalType,
+      action: signal.triggerAction === "买入提醒" ? "BUY" : "SELL",
+      direction: signal.direction,
+      entryTimeLabel: entryPoint.label,
+      entryTimestampMs: entryPoint.timestampMs,
+      exitTimeLabel: exitPoint.label,
+      exitTimestampMs,
+      holdingMinutes: Math.max(0, Math.round((exitTimestampMs - entryPoint.timestampMs) / 60_000)),
+      entryPrice: signal.triggerPrice,
+      currentPrice,
+      simulatedExitPrice,
+      realizedPnlPct,
+      unrealizedPnlPct,
+      maxDrawdownPct,
+      statusLabel,
+      riskLevel: signal.riskLevel,
+      failureReason: signal.failureReason,
+      invalidationReason,
+      rationale: signal.triggerReason,
+      reviewedAtMs: signal.reviewedAtMs,
+      markerLabel: entryPoint.label,
+      markerPrice: signal.triggerPrice,
+      markerTone: signal.triggerAction === "买入提醒" ? "buy" : "sell",
+      rewardScore,
+      explanation: `VTA：${vtaAnnotations.slice(0, 2).join("；")} F-LOAM 执行位：触发 ${round(signal.triggerPrice)} / 止损 ${signal.stopLossPrice ?? "未设"}。强化反馈奖励 ${rewardScore}。`,
+      reasoning,
+      parameterFeedback,
+    };
+  });
+}
+
+function buildSimulationTape(item: WatchlistRecord, history: PriceHistoryPoint[], signals: SignalRecord[]) {
+  const trades = buildSimulatedTradesForSymbol(item, history, signals);
+  const openTrades = trades.filter(trade => trade.statusLabel === "持仓中");
+  const closedTrades = trades.filter(trade => trade.statusLabel !== "持仓中");
+  const floatingPnlPct = openTrades.length > 0
+    ? round(averageOf(openTrades.map(trade => trade.unrealizedPnlPct)), 2)
+    : 0;
+  const realizedPnlPct = closedTrades.length > 0
+    ? round(averageOf(closedTrades.map(trade => trade.realizedPnlPct)), 2)
+    : 0;
+  const maxDrawdownPct = trades.length > 0
+    ? round(Math.max(...trades.map(trade => trade.maxDrawdownPct)), 2)
+    : 0;
+
+  return {
+    trades,
+    summary: {
+      tradeCount: trades.length,
+      openCount: openTrades.length,
+      floatingPnlPct,
+      realizedPnlPct,
+      maxDrawdownPct,
+      averageRewardScore: trades.length > 0 ? round(averageOf(trades.map(trade => trade.rewardScore)), 2) : 0,
+    },
+  };
+}
+
+export function buildSimulatedTrades(userId: number, input?: { market?: Market; symbol?: string }) {
+  const workspace = getWorkspace(userId);
+  const candidates = scopedWatchlist(userId).filter(item => {
+    const matchesMarket = !input?.market || item.market === input.market;
+    const matchesSymbol = !input?.symbol || item.symbol === normalizeSymbol(item.market, input.symbol);
+    return matchesMarket && matchesSymbol;
+  });
+
+  return candidates.flatMap(item => {
+    const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
+    const signalFamily = workspace.signals.filter(signal => signal.symbol === item.symbol && signal.market === item.market);
+    return buildSimulatedTradesForSymbol(item, history, signalFamily);
+  }).sort((a, b) => b.entryTimestampMs - a.entryTimestampMs);
+}
+
+export function describeSignal(userId: number, signalId: number) {
+  const workspace = getWorkspace(userId);
+  const signal = workspace.signals.find(item => item.id === signalId);
+  if (!signal) return null;
+  const item = workspace.watchlistItems.find(entry => entry.market === signal.market && entry.symbol === signal.symbol);
+  if (!item) return null;
+  const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
+  return {
+    reasoning: deriveSignalReasoning(workspace, item, signal, history),
+    parameterFeedback: deriveAdaptiveParameterFeedback(workspace, signal.market, signal.symbol, signal.signalType),
+  };
+}
+
+export function getSignalStrategyFrame(userId: number, signalId: number): SignalStrategyFrame | null {
+  const workspace = getWorkspace(userId);
+  const signal = workspace.signals.find(item => item.id === signalId);
+  if (!signal) return null;
+  const item = workspace.watchlistItems.find(entry => entry.market === signal.market && entry.symbol === signal.symbol);
+  if (!item) return null;
+  const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
+  const signalFamily = workspace.signals.filter(entry => entry.market === signal.market && entry.symbol === signal.symbol);
+  const learning = summarizeSignalLearning(signalFamily);
+  const vtaAnnotations = buildVtaAnnotationsFromHistory(item, history, signalFamily);
+  const eventScore = clamp(round(signal.quoteChangePct * 3.4 + (signal.direction === "做空" ? -2 : signal.direction === "做多" ? 2 : 0) + learning.rewardScore, 2), -20, 20);
+  const structureSummary = `${item.name} 当前实时价 ${round(item.lastPrice)}，触发结构为 ${signal.signalType}，执行位 ${round(signal.triggerPrice)}，止损参考 ${signal.stopLossPrice ?? "未设"}。`;
+  const eventContextSummary = `${item.name} 当前事件代理分 ${eventScore}，风险标签为 ${signal.riskTags.join("、") || "无"}，量价状态显示 ${signal.triggerAction} 更接近当前执行方向。`;
+  const reinforcementSummary = `近 ${learning.evaluatedCount} 笔已验证样本成功率 ${learning.successRate}% ，平均奖励 ${learning.rewardScore} ，Sharpe 风格分数 ${learning.sharpeLikeScore} ，当前自适应权重 ${learning.adaptiveWeight}。`;
+
+  return {
+    market: signal.market,
+    symbol: signal.symbol,
+    name: item.name,
+    vtaAnnotations,
+    structureSummary,
+    eventContextSummary,
+    reinforcementSummary,
+    eventScore,
+    sharpeLikeScore: learning.sharpeLikeScore,
+    rewardScore: learning.rewardScore,
+    adaptiveWeight: learning.adaptiveWeight,
+  };
 }
 
 function strategyWeightForSignalType(workspace: TradingWorkspace, signalType: SignalType) {
@@ -430,17 +809,38 @@ function upsertPriceHistory(userId: number, quote: LiveQuoteInput) {
   workspace.priceHistory[key] = [...previousHistory, nextPoint].slice(-PRICE_HISTORY_LIMIT);
 }
 
-function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): SignalBlueprint | null {
+function buildSignalBlueprint(userId: number, quote: LiveQuoteInput, settings: SettingsRecord): SignalBlueprint | null {
+  const workspace = getWorkspace(userId);
+  const normalizedSymbol = normalizeSymbol(quote.market, quote.symbol);
+  const history = workspace.priceHistory[symbolKey(quote.market, normalizedSymbol)] ?? [];
+  const signalFamily = workspace.signals.filter(signal => signal.market === quote.market && signal.symbol === normalizedSymbol);
+  const learning = summarizeSignalLearning(signalFamily);
   const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
   const pullbackFromHighPct = quote.highPrice > 0 ? ((quote.highPrice - quote.lastPrice) / quote.highPrice) * 100 : 0;
   const fromOpenPct = quote.openPrice > 0 ? ((quote.lastPrice - quote.openPrice) / quote.openPrice) * 100 : 0;
   const sensitivityScore = sensitivityAdjustment(settings.signalSensitivity);
   const turnoverFactor = quote.turnover / Math.max(settings.scanThresholds.minTurnover, 1);
   const volumeScore = clamp(turnoverFactor * 10, 0, 12);
-  const baseReason = `${quote.symbol} 最新价 ${round(quote.lastPrice)}，涨跌幅 ${round(changePct)}%，成交额 ${Math.round(quote.turnover).toLocaleString()}。`;
+  const recent = history.slice(-12);
+  const recentStart = recent[0]?.price ?? quote.openPrice;
+  const recentEnd = recent[recent.length - 1]?.price ?? quote.lastPrice;
+  const intradayTrendPct = recentStart > 0 ? ((recentEnd - recentStart) / recentStart) * 100 : changePct;
+  const volatilityPct = recent.length > 1
+    ? recent.slice(1).reduce((sum, point, index) => sum + Math.abs(point.price - recent[index].price), 0)
+      / Math.max(recent.length - 1, 1)
+      / Math.max(recentEnd, 0.0001)
+      * 100
+    : Math.abs(changePct - fromOpenPct);
+  const eventScore = clamp(
+    round(changePct * 3.2 + intradayTrendPct * 2.8 + turnoverFactor * 6 - pullbackFromHighPct * 1.5 + learning.rewardScore, 2),
+    -16,
+    18,
+  );
+  const contextTail = `VTA 注释显示分时趋势 ${round(intradayTrendPct)}%，波动强度 ${round(volatilityPct)}%，事件代理分 ${eventScore}，强化权重 ${learning.adaptiveWeight}。`;
+  const baseReason = `${normalizedSymbol} 最新价 ${round(quote.lastPrice)}，涨跌幅 ${round(changePct)}%，成交额 ${Math.round(quote.turnover).toLocaleString()}。${contextTail}`;
 
   if (changePct >= 2.2 && fromOpenPct >= 1.2 && pullbackFromHighPct <= 0.6) {
-    const score = clamp(Math.round(78 + changePct * 3 + volumeScore + sensitivityScore), 65, 98);
+    const score = clamp(Math.round(78 + changePct * 3 + volumeScore + sensitivityScore + eventScore * 0.55 + (learning.adaptiveWeight - 1) * 12), 65, 98);
     return {
       signalType: "突破啟動" as const,
       score,
@@ -448,19 +848,19 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       triggerAction: "买入提醒" as const,
       triggerPrice: round(quote.highPrice),
       stopLossPrice: round(Math.max(quote.openPrice, quote.lastPrice * 0.985)),
-      invalidationCondition: `若回落并跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))}，则本次突破买入逻辑失效。`,
+      invalidationCondition: `若回落并跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))}，则本次突破买入逻辑失效；事件代理分若转负也需同步撤销。`,
       triggerReason: `${baseReason}价格贴近当日高点且量价共振，符合突破啟動结构。`,
-      riskTags: ["追价滑点", "高位波动"],
-      riskLevel: "高",
-      executionPrerequisite: "价格放量站上当日高点后，至少一个刷新周期不跌回触发位下方。",
+      riskTags: ["追价滑点", "高位波动", eventScore < 0 ? "事件反转风险" : "趋势拥挤"],
+      riskLevel: eventScore >= 6 ? "中" : "高",
+      executionPrerequisite: "价格放量站上当日高点后，至少一个刷新周期不跌回触发位下方，并保持事件代理分不转负。",
       entryRange: `买入触发价 ${round(quote.highPrice)}`,
       stopLoss: `跌破 ${round(Math.max(quote.openPrice, quote.lastPrice * 0.985))} 需降低仓位`,
-      rationale: "当前属于顺势启动型结构，更适合等待明确突破点触发后的跟进，而不是无保护追高。",
+      rationale: `当前属于顺势启动型结构，更适合等待明确突破点触发后的跟进，而不是无保护追高。强化反馈权重 ${learning.adaptiveWeight} 已纳入执行评分。`,
     };
   }
 
   if (changePct >= 0.8 && fromOpenPct > 0 && pullbackFromHighPct > 0.6 && pullbackFromHighPct <= 1.8) {
-    const score = clamp(Math.round(72 + changePct * 2.6 + volumeScore + sensitivityScore), 60, 95);
+    const score = clamp(Math.round(72 + changePct * 2.6 + volumeScore + sensitivityScore + eventScore * 0.45 + (learning.adaptiveWeight - 1) * 12), 60, 95);
     return {
       signalType: "回踩續強" as const,
       score,
@@ -468,19 +868,19 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       triggerAction: "买入提醒" as const,
       triggerPrice: round(quote.lastPrice),
       stopLossPrice: round(quote.openPrice * 0.995),
-      invalidationCondition: `若失守 ${round(quote.openPrice * 0.995)}，说明回踩承接失败，本次买入提醒失效。`,
+      invalidationCondition: `若失守 ${round(quote.openPrice * 0.995)}，说明回踩承接失败，本次买入提醒失效；若事件代理分大幅走弱也应暂停执行。`,
       triggerReason: `${baseReason}冲高后并未深度破坏结构，回踩仍保持在强势区，符合回踩續強特征。`,
-      riskTags: ["二次确认失败", "午后回落"],
-      riskLevel: "中",
-      executionPrerequisite: "回踩后仍守住关键承接位，并重新站回触发价。",
+      riskTags: ["二次确认失败", "午后回落", volatilityPct > 1 ? "波动放大" : "承接减弱"],
+      riskLevel: eventScore >= 3 ? "中" : "高",
+      executionPrerequisite: "回踩后仍守住关键承接位，并重新站回触发价，同时强化反馈权重维持在 0.9 以上。",
       entryRange: `买入触发价 ${round(quote.lastPrice)}`,
       stopLoss: `失守 ${round(quote.openPrice * 0.995)} 需谨慎`,
-      rationale: "适合把回踩后的承接强度作为入场依据，一旦价格重新站稳当前触发点，可视作跟进信号。",
+      rationale: `适合把回踩后的承接强度作为入场依据，一旦价格重新站稳当前触发点，可视作跟进信号。当前奖励分 ${learning.rewardScore} 已用于微调强度。`,
     };
   }
 
   if (Math.abs(changePct) <= 1.2 && turnoverFactor >= 1.15 && quote.volume >= 1_500_000) {
-    const score = clamp(Math.round(68 + volumeScore + sensitivityScore), 58, 90);
+    const score = clamp(Math.round(68 + volumeScore + sensitivityScore + eventScore * 0.35 + (learning.adaptiveWeight - 1) * 10), 58, 90);
     return {
       signalType: "盤口失衡" as const,
       score,
@@ -492,17 +892,17 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
         ? `若跌回 ${round(quote.lowPrice)} 下方，则买方失衡信号失效。`
         : `若重新站上 ${round(quote.highPrice)}，则卖方失衡信号失效。`,
       triggerReason: `${baseReason}价格波动有限但成交明显抬升，说明短线买卖力量正在重新分配。`,
-      riskTags: ["需要盘口确认", "假突破风险"],
+      riskTags: ["需要盘口确认", "假突破风险", learning.sharpeLikeScore < 0 ? "历史反馈偏弱" : "等待进一步确认"],
       riskLevel: "中",
       executionPrerequisite: changePct >= 0 ? "量能抬升且价格继续稳在触发价上方。" : "卖压持续增强且价格无法重新站回触发价。",
       entryRange: `${changePct >= 0 ? "买入" : "卖出"}触发价 ${round(quote.lastPrice)}`,
       stopLoss: changePct >= 0 ? `若跌回 ${round(quote.lowPrice)} 下方则取消观察` : `若重新站上 ${round(quote.highPrice)} 上方则取消观察`,
-      rationale: "该信号强调力量失衡形成的实时节点，适合作为盘中买卖提醒，而不是宽泛区间预测。",
+      rationale: `该信号强调力量失衡形成的实时节点，适合作为盘中买卖提醒，而不是宽泛区间预测。当前 Sharpe 风格分数 ${learning.sharpeLikeScore}。`,
     };
   }
 
   if (changePct >= 1.6 && pullbackFromHighPct >= 1.1 && quote.lastPrice < quote.highPrice * 0.989) {
-    const score = clamp(Math.round(70 + changePct * 2.3 + sensitivityScore), 60, 92);
+    const score = clamp(Math.round(70 + changePct * 2.3 + sensitivityScore - eventScore * 0.2 + (learning.adaptiveWeight - 1) * 8), 60, 92);
     return {
       signalType: "冲高衰竭" as const,
       score,
@@ -510,14 +910,14 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
       triggerAction: "卖出提醒" as const,
       triggerPrice: round(quote.lastPrice),
       stopLossPrice: round(quote.highPrice * 0.997),
-      invalidationCondition: `若重新站回 ${round(quote.highPrice * 0.997)} 上方，则本次卖出提醒失效。`,
+      invalidationCondition: `若重新站回 ${round(quote.highPrice * 0.997)} 上方，则本次卖出提醒失效；若事件代理分明显转正也需撤销。`,
       triggerReason: `${baseReason}价格从高位回落幅度扩大，冲高后的跟随资金不足，出现冲高衰竭迹象。`,
-      riskTags: ["高位回落", "承接减弱"],
+      riskTags: ["高位回落", "承接减弱", eventScore > 0 ? "反抽风险" : "抛压扩散"],
       riskLevel: "中",
-      executionPrerequisite: "冲高后承接持续减弱，且价格无法重新站回高位压力区。",
+      executionPrerequisite: "冲高后承接持续减弱，且价格无法重新站回高位压力区，同时事件代理分不重新转正。",
       entryRange: `卖出触发价 ${round(quote.lastPrice)}`,
       stopLoss: `重新站回 ${round(quote.highPrice * 0.997)} 上方则撤销衰竭判断`,
-      rationale: "这类结构更适合作为卖出或减仓提醒，应优先管理已有盈利与高位回撤风险。",
+      rationale: `这类结构更适合作为卖出或减仓提醒，应优先管理已有盈利与高位回撤风险。强化反馈会在连续失效时自动降低该模式权重。`,
     };
   }
 
@@ -525,7 +925,7 @@ function buildSignalBlueprint(quote: LiveQuoteInput, settings: SettingsRecord): 
 }
 
 function buildSignalRecord(userId: number, quote: LiveQuoteInput, settings: SettingsRecord): SignalRecord | null {
-  const blueprint = buildSignalBlueprint(quote, settings);
+  const blueprint = buildSignalBlueprint(userId, quote, settings);
   if (!blueprint) return null;
   const workspace = getWorkspace(userId);
   const changePct = quote.prevClosePrice > 0 ? ((quote.lastPrice - quote.prevClosePrice) / quote.prevClosePrice) * 100 : 0;
@@ -1013,6 +1413,7 @@ export function summarizeDashboard(userId: number) {
     const learning = summarizeSignalLearning(signalFamily);
     const history = workspace.priceHistory[symbolKey(item.market, item.symbol)] ?? [];
     const chart = buildForecastCurve(item, history, activeSignal);
+    const simulation = buildSimulationTape(item, history, signalFamily);
     const forecastEnd = chart[chart.length - 1]?.forecastPrice ?? item.lastPrice;
     const trendBias = forecastEnd >= item.lastPrice ? "偏多" : "偏空";
     return {
@@ -1028,6 +1429,8 @@ export function summarizeDashboard(userId: number) {
       suggestionEntryRange: activeSignal?.entryRange ?? null,
       sourceMode: item.sourceMode,
       chart,
+      simulationTape: simulation.trades,
+      simulationSummary: simulation.summary,
       forecastSummary: {
         trendBias,
         predictedPrice: forecastEnd,
@@ -1039,6 +1442,8 @@ export function summarizeDashboard(userId: number) {
         evaluatedCount: learning.evaluatedCount,
         averageReturnPct: learning.averageReturnPct,
         averageAdversePct: learning.averageAdversePct,
+        rewardScore: learning.rewardScore,
+        sharpeLikeScore: learning.sharpeLikeScore,
         adaptiveWeight: learning.adaptiveWeight,
       },
       executionPrerequisite: activeSignal?.executionPrerequisite ?? (latestInvalidatedSignal ? "旧建议已失效，等待新的价格结构与量能确认后再生成实时指令。" : "等待价格与成交量同时确认。"),
@@ -1057,6 +1462,13 @@ export function summarizeDashboard(userId: number) {
         price: activeSignal.triggerPrice,
         action: activeSignal.triggerAction,
       } : null,
+      simulationMarkers: simulation.trades.map(trade => ({
+        label: trade.markerLabel,
+        price: trade.markerPrice,
+        action: trade.action,
+        tone: trade.markerTone,
+        pnlPct: trade.statusLabel === "持仓中" ? trade.unrealizedPnlPct : trade.realizedPnlPct,
+      })),
     };
   });
 
@@ -1080,6 +1492,8 @@ export function summarizeDashboard(userId: number) {
       evaluatedCount: strategyLearning.evaluatedCount,
       averageReturnPct: strategyLearning.averageReturnPct,
       averageAdversePct: strategyLearning.averageAdversePct,
+      rewardScore: strategyLearning.rewardScore,
+      sharpeLikeScore: strategyLearning.sharpeLikeScore,
       adaptiveWeight: strategyLearning.adaptiveWeight,
       strongestSignalType: review.meta.accuracyBySignal.sort((a, b) => b.hitRate - a.hitRate)[0]?.signalType ?? "突破啟動",
       weakestSignalType: review.meta.accuracyBySignal.sort((a, b) => a.hitRate - b.hitRate)[0]?.signalType ?? "盤口失衡",
