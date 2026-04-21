@@ -48,9 +48,11 @@ const menuItems = [
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
-const DEFAULT_WIDTH = 304;
-const MIN_WIDTH = 220;
-const MAX_WIDTH = 420;
+const DEFAULT_WIDTH = 268;
+const MIN_WIDTH = 208;
+const MAX_WIDTH = 360;
+const AUTO_COLLAPSE_BREAKPOINT = 1480;
+const AUTO_EXPAND_BREAKPOINT = 1760;
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -107,7 +109,7 @@ type DashboardLayoutContentProps = {
 function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
-  const { state, toggleSidebar } = useSidebar();
+  const { state, toggleSidebar, setOpen } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -119,6 +121,25 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
       setIsResizing(false);
     }
   }, [isCollapsed]);
+
+  useEffect(() => {
+    if (isMobile) return;
+
+    const syncSidebarByViewport = () => {
+      const width = window.innerWidth;
+      if (width <= AUTO_COLLAPSE_BREAKPOINT) {
+        setOpen(false);
+        return;
+      }
+      if (width >= AUTO_EXPAND_BREAKPOINT) {
+        setOpen(true);
+      }
+    };
+
+    syncSidebarByViewport();
+    window.addEventListener("resize", syncSidebarByViewport);
+    return () => window.removeEventListener("resize", syncSidebarByViewport);
+  }, [isMobile, setOpen]);
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -151,11 +172,11 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
     <>
       <div className="relative" ref={sidebarRef}>
         <Sidebar collapsible="icon" className="border-r-0 bg-transparent" disableTransition={isResizing}>
-          <SidebarHeader className="border-b border-sidebar-border/70 px-3 py-4">
+          <SidebarHeader className="border-b border-sidebar-border/70 px-2.5 py-3">
             <div className="flex items-center gap-3">
               <button
                 onClick={toggleSidebar}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sidebar-border/70 bg-white/80 text-slate-600 transition-colors hover:bg-white"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sidebar-border/70 bg-white/85 text-slate-600 transition-colors hover:bg-white"
                 aria-label="Toggle navigation"
               >
                 <PanelLeft className="h-4 w-4" />
@@ -169,7 +190,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             </div>
           </SidebarHeader>
 
-          <SidebarContent className="bg-transparent px-2 py-4">
+          <SidebarContent className="bg-transparent px-2 py-3">
             <div className="mb-3 px-2 font-mono text-[11px] uppercase tracking-[0.26em] text-slate-500 group-data-[collapsible=icon]:hidden">
               Workspace
             </div>
@@ -193,7 +214,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="border-t border-sidebar-border/70 p-3">
+          <SidebarFooter className="border-t border-sidebar-border/70 p-2.5">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex w-full items-center gap-3 rounded-2xl border border-sidebar-border/70 bg-white/80 px-2 py-2 text-left transition-colors hover:bg-white group-data-[collapsible=icon]:justify-center">
@@ -239,7 +260,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             </div>
           </div>
         ) : null}
-        <main className="min-h-screen flex-1 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.16),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px)] [background-size:auto,auto,28px_28px,28px_28px] p-4 md:p-6">
+        <main className="min-h-screen flex-1 overflow-x-hidden bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.16),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.12),transparent_24%),linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px)] [background-size:auto,auto,28px_28px,28px_28px] p-3 md:p-4 xl:p-5 2xl:p-6">
           {children}
         </main>
       </SidebarInset>

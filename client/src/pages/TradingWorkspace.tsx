@@ -85,14 +85,14 @@ function BlueprintPageShell({
   workspaceLabel?: string;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-[2rem] border border-border/70 bg-card/88 p-6 shadow-[0_24px_90px_-48px_rgba(14,116,144,0.55)] backdrop-blur-sm md:p-8">
+    <div className="relative w-full min-w-0 overflow-hidden rounded-[1.75rem] border border-border/70 bg-card/88 p-4 shadow-[0_24px_90px_-48px_rgba(14,116,144,0.55)] backdrop-blur-sm md:p-5 2xl:p-6">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.22),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(244,114,182,0.18),transparent_28%),linear-gradient(rgba(148,163,184,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.07)_1px,transparent_1px)] [background-size:auto,auto,28px_28px,28px_28px]" />
-      <div className="pointer-events-none absolute right-6 top-6 hidden rounded-2xl border border-cyan-200/70 bg-white/70 px-4 py-3 font-mono text-[11px] leading-6 text-slate-400 lg:block">
+      <div className="pointer-events-none absolute right-5 top-5 hidden rounded-2xl border border-cyan-200/70 bg-white/70 px-4 py-3 font-mono text-[11px] leading-6 text-slate-400 xl:block">
         <div>f(x) = Σ(wᵢ · xᵢ) + ε</div>
         <div>R = ∫ P(t) dV / σ</div>
         <div>Δt · momentum &gt; threshold</div>
       </div>
-      <div className="pointer-events-none absolute bottom-6 left-6 hidden rounded-full border border-pink-200/80 bg-white/70 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.24em] text-pink-500 md:block">
+      <div className="pointer-events-none absolute bottom-5 left-5 hidden rounded-full border border-pink-200/80 bg-white/70 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.24em] text-pink-500 lg:block">
         {workspaceLabel}
       </div>
       <div className="relative space-y-6">
@@ -255,15 +255,29 @@ export function DashboardPage() {
   }
 
   const trades = simulatedTrades.data ?? [];
+  const markerInsights = [...(activeBoard.simulationMarkers ?? [])].slice(-4).reverse();
+  const reasoningEntries = activeBoard.signalReasoning ? [
+    { label: "宏观因子", value: activeBoard.signalReasoning.macroFactor },
+    { label: "事件因子", value: activeBoard.signalReasoning.eventFactor },
+    { label: "量价因子", value: activeBoard.signalReasoning.priceActionFactor },
+    { label: "强化反馈", value: activeBoard.signalReasoning.reinforcementFactor },
+  ] : [];
+  const eventInputEntries = Object.entries(activeBoard.eventInputs ?? {});
+  const parameterEntries = activeBoard.parameterFeedback ? [
+    { label: "LLM 偏向", value: activeBoard.parameterFeedback.llmBiasShift },
+    { label: "事件权重", value: activeBoard.parameterFeedback.eventWeight },
+    { label: "阈值偏移%", value: activeBoard.parameterFeedback.triggerThresholdShiftPct },
+    { label: "止损缓冲%", value: activeBoard.parameterFeedback.stopLossBufferPct },
+  ] : [];
 
   return (
     <BlueprintPageShell
       eyebrow="Dashboard"
       title="双标实时终端"
-      description="主图优先，只保留实时决策必要信息：代码、现价、BUY / SELL 覆盖点、预测线与下方模拟 P&L 验证区。"
+      description="横向全屏呈现主图、指令、结构化解释与模拟验证结果。页面会随窗口宽度自适应重排，并在空间不足时自动收缩左侧导航。"
       workspaceLabel={data.liveBridge.sourceLabel}
     >
-      <div className="flex flex-wrap items-center gap-3 rounded-[1.4rem] border border-slate-200 bg-white/82 px-4 py-3 text-sm text-slate-600 shadow-[0_18px_60px_-42px_rgba(15,23,42,0.25)]">
+      <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] border border-slate-200 bg-white/82 px-4 py-3 text-sm text-slate-600 shadow-[0_18px_60px_-42px_rgba(15,23,42,0.25)]">
         <MarketPill market="HK" status={data.marketStatus.HK} />
         <div className={`rounded-full border px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] ${bridgeStatusTone(data.liveBridge.connectionStatus)}`}>
           桥接状态 · {data.liveBridge.connectionStatus}
@@ -276,16 +290,16 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_19rem]">
-        <Card className="overflow-hidden border-slate-800/90 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)] xl:col-span-2">
-          <CardHeader className="space-y-5 border-b border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(7,17,31,0.99))] pb-5">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.65fr)_minmax(22rem,0.9fr)]">
+        <Card className="overflow-hidden border-slate-800/90 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+          <CardHeader className="space-y-4 border-b border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(7,17,31,0.99))] px-4 py-4 xl:px-5">
             <div className="flex flex-wrap items-center gap-3">
               {liveBoard.map((item: any) => (
                 <button
                   key={item.identityKey}
                   type="button"
                   onClick={() => setActiveSymbol(item.symbol)}
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${activeBoard.symbol === item.symbol ? "border-cyan-400/50 bg-cyan-400/10 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.15)]" : "border-slate-700 bg-slate-950/50 text-slate-300 hover:border-slate-600 hover:text-white"}`}
+                  className={`min-w-[9rem] rounded-2xl border px-4 py-3 text-left transition ${activeBoard.symbol === item.symbol ? "border-cyan-400/50 bg-cyan-400/10 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.15)]" : "border-slate-700 bg-slate-950/50 text-slate-300 hover:border-slate-600 hover:text-white"}`}
                 >
                   <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.24em]">
                     <span>{item.symbol}</span>
@@ -296,7 +310,8 @@ export function DashboardPage() {
                 </button>
               ))}
             </div>
-            <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(26rem,0.95fr)] xl:items-end">
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className="border-slate-700 bg-slate-900/60 font-mono text-[11px] text-slate-200">{activeBoard.market}</Badge>
@@ -304,11 +319,12 @@ export function DashboardPage() {
                   {activeBoard.activeSignalType ? <Badge variant="outline" className="border-slate-700 bg-slate-900/50 font-mono text-slate-300">{activeBoard.activeSignalType}</Badge> : null}
                 </div>
                 <div>
-                  <CardTitle className="text-4xl font-black tracking-[-0.05em] text-white">{activeBoard.securityLabel}</CardTitle>
+                  <CardTitle className="text-4xl font-black tracking-[-0.05em] text-white 2xl:text-5xl">{activeBoard.securityLabel}</CardTitle>
                   <CardDescription className="mt-2 max-w-4xl text-sm leading-7 text-slate-300">{activeBoard.llmForecastSummary}</CardDescription>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-4 xl:min-w-[38rem]">
+
+              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
                 <div className="rounded-2xl border border-slate-700 bg-slate-950/60 p-4">
                   <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">最新价</div>
                   <div className="mt-2 text-4xl font-black tracking-[-0.05em] text-white">{formatNumber(activeBoard.lastPrice)}</div>
@@ -333,8 +349,8 @@ export function DashboardPage() {
             </div>
           </CardHeader>
 
-          <CardContent className="space-y-5 p-4 xl:p-5">
-            <div className="rounded-[1.75rem] border border-slate-800 bg-[radial-gradient(circle_at_top,rgba(15,23,42,0.95),rgba(2,6,23,0.98))] p-4 xl:p-5">
+          <CardContent className="space-y-4 p-4 xl:p-5">
+            <div className="rounded-[1.5rem] border border-slate-800 bg-[radial-gradient(circle_at_top,rgba(15,23,42,0.95),rgba(2,6,23,0.98))] p-4 xl:p-5">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
                 <div className="flex flex-wrap gap-2">
                   <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1">开 {formatNumber(activeBoard.openPrice)}</span>
@@ -344,14 +360,15 @@ export function DashboardPage() {
                 </div>
                 <div className="font-mono tracking-[0.3em] text-slate-500">REALTIME TRADING TERMINAL</div>
               </div>
+
               <ChartContainer
-                className="h-[480px] w-full"
+                className="h-[54vh] min-h-[420px] max-h-[640px] w-full"
                 config={{
                   price: { label: "实时价格", color: "#38bdf8" },
                   forecastPrice: { label: "预测走势线", color: "#f97316" },
                 }}
               >
-                <ComposedChart data={activeBoard.chart} margin={{ left: 8, right: 16, top: 12, bottom: 8 }}>
+                <ComposedChart data={activeBoard.chart} margin={{ left: 8, right: 18, top: 12, bottom: 8 }}>
                   <CartesianGrid vertical stroke="rgba(148,163,184,0.12)" strokeDasharray="3 3" />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} tick={{ fill: "#94a3b8", fontSize: 11 }} />
                   <YAxis orientation="right" tickLine={false} axisLine={false} domain={["dataMin - 1", "dataMax + 1"]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
@@ -384,7 +401,7 @@ export function DashboardPage() {
                       label={{ value: `NOW ${formatNumber(activeBoard.latestMarker.price)}`, position: "right", fill: "#e2e8f0", fontSize: 11 }}
                     />
                   ) : null}
-                  {(activeBoard.simulationMarkers ?? []).map((marker: any, markerIndex: number) => (
+                  {markerInsights.map((marker: any, markerIndex: number) => (
                     <ReferenceDot
                       key={`${activeBoard.identityKey}-simulation-${markerIndex}`}
                       x={marker.label}
@@ -400,18 +417,37 @@ export function DashboardPage() {
                   <Line type="monotone" dataKey="forecastPrice" stroke="#f97316" strokeWidth={2.5} dot={false} strokeDasharray="7 5" connectNulls />
                 </ComposedChart>
               </ChartContainer>
-            </div>
 
-            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
-                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">执行与解释</div>
-                <div className={`mt-3 text-2xl font-black tracking-[-0.03em] ${activeBoard.suggestionAction === "卖出提醒" ? "text-rose-300" : activeBoard.suggestionAction === "买入提醒" ? "text-emerald-300" : "text-slate-200"}`}>{activeBoard.suggestionAction ?? "观察中"}</div>
-                <div className="mt-3 text-sm leading-6 text-slate-300">{activeBoard.executionPrerequisite}</div>
-                <div className="mt-4 rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm leading-6 text-slate-400">{activeBoard.llmStrategyNote}</div>
+              <div className="mt-4 grid gap-3 xl:grid-cols-4">
+                {markerInsights.length > 0 ? markerInsights.map((marker: any, index: number) => (
+                  <div key={`${marker.signalId ?? marker.label}-${index}`} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`rounded-full px-2.5 py-1 font-mono text-[10px] uppercase ${marker.tone === "buy" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{marker.action}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">{marker.label}</span>
+                    </div>
+                    <div className="mt-2 text-lg font-black text-white">{formatNumber(marker.price)}</div>
+                    <div className="mt-2 text-xs leading-6 text-slate-400">{marker.explanation ?? "该点位由结构、事件与强化反馈共同触发。"}</div>
+                  </div>
+                )) : (
+                  <div className="xl:col-span-4 rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前暂无足够的回放 marker。后续模拟交易生成后，这里会展示图上触发点与解释摘要。</div>
+                )}
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid content-start gap-4">
+          <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+            <CardContent className="space-y-4 p-4">
+              <div>
+                <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">执行与解释</div>
+                <div className={`mt-3 text-3xl font-black tracking-[-0.04em] ${activeBoard.suggestionAction === "卖出提醒" ? "text-rose-300" : activeBoard.suggestionAction === "买入提醒" ? "text-emerald-300" : "text-slate-200"}`}>{activeBoard.suggestionAction ?? "观察中"}</div>
+                <div className="mt-3 text-sm leading-6 text-slate-300">{activeBoard.executionPrerequisite}</div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm leading-6 text-slate-400">{activeBoard.llmStrategyNote}</div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
-                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">策略与风险</div>
+                <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">策略与风险</div>
                   <div className="mt-3 grid gap-2 text-sm text-slate-300">
                     <div className="flex items-center justify-between gap-3"><span>策略</span><span className="font-semibold text-white">{activeBoard.activeSignalType ?? "趋势跟踪"}</span></div>
                     <div className="flex items-center justify-between gap-3"><span>风险等级</span><span className="font-semibold text-white">{activeBoard.riskLevel}</span></div>
@@ -419,8 +455,8 @@ export function DashboardPage() {
                     <div className="flex items-center justify-between gap-3"><span>预测变化</span><span className={activeBoard.forecastSummary.predictedChangePct >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>{formatSigned(activeBoard.forecastSummary.predictedChangePct)}</span></div>
                   </div>
                 </div>
-                <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
-                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">强化反馈</div>
+                <div className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">强化反馈</div>
                   {activeBoard.failureReason ? <div className="mt-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">最近失效：{activeBoard.failureReason}</div> : null}
                   <div className="mt-3 grid gap-2 text-sm text-slate-300">
                     <div className="flex items-center justify-between gap-3"><span>平均收益</span><span className="font-semibold text-white">{activeBoard.strategyLearning.averageReturnPct}%</span></div>
@@ -430,74 +466,114 @@ export function DashboardPage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <div className="rounded-[1.5rem] border border-slate-800 bg-slate-950/70 p-4">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div>
-                  <div className="flex items-center gap-2 font-semibold text-white"><TrendingUp className="h-4 w-4 text-cyan-300" />模拟 P&L 验证面板</div>
-                  <div className="mt-1 text-sm text-slate-400">逐笔回放 {activeBoard.securityLabel} 的 BUY / SELL 触发，验证入场、出场、回撤、奖励分与失效原因。</div>
+          <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+            <CardContent className="space-y-4 p-4">
+              <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">结构化 reasoning</div>
+              {reasoningEntries.length > 0 ? reasoningEntries.map(entry => (
+                <div key={entry.label} className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3">
+                  <div className="text-sm font-semibold text-white">{entry.label}</div>
+                  <div className="mt-2 text-sm leading-6 text-slate-400">{entry.value}</div>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-5">
-                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">交易笔数</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.tradeCount}</span></div>
-                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">持仓中</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.openCount}</span></div>
-                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">浮动收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.floatingPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.floatingPnlPct)}</span></div>
-                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">已实现收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.realizedPnlPct)}</span></div>
-                  <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">最大回撤</span><span className="mt-2 block text-xl font-black text-white">{formatNumber(activeBoard.simulationSummary.maxDrawdownPct)}%</span></div>
-                </div>
-              </div>
+              )) : <div className="rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前尚未生成结构化 reasoning，等待新的有效信号。</div>}
+            </CardContent>
+          </Card>
 
-              <div className="mt-4 overflow-hidden rounded-[1.25rem] border border-slate-800 bg-[#08101d]">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-950/70">
-                      <tr>
-                        {[
-                          "时间",
-                          "触发",
-                          "入场",
-                          "出场",
-                          "P&L",
-                          "回撤",
-                          "持有",
-                          "奖励",
-                          "状态 / 失效",
-                        ].map(header => (
-                          <th key={header} className="px-4 py-3 text-left font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{header}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {trades.length > 0 ? trades.slice(0, 8).map((trade: any) => (
-                        <tr key={`${trade.identityKey}-${trade.signalId}`} className="border-t border-slate-800 text-slate-300">
-                          <td className="px-4 py-3 whitespace-nowrap">{trade.entryTimeLabel}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <span className={`rounded-full px-2.5 py-1 font-mono text-xs ${trade.action === "BUY" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{trade.action}</span>
-                              <span className="text-xs text-slate-400">{trade.signalType}</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.entryPrice)}</td>
-                          <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.simulatedExitPrice)}</td>
-                          <td className={`px-4 py-3 font-semibold ${trade.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(trade.realizedPnlPct)}</td>
-                          <td className="px-4 py-3">{formatNumber(trade.maxDrawdownPct)}%</td>
-                          <td className="px-4 py-3">{trade.holdingMinutes}m</td>
-                          <td className={`px-4 py-3 font-semibold ${trade.rewardScore >= 0 ? "text-cyan-300" : "text-amber-300"}`}>{trade.rewardScore}</td>
-                          <td className="px-4 py-3 text-xs leading-6 text-slate-400">{trade.invalidationReason ?? trade.failureReason ?? trade.explanation}</td>
-                        </tr>
-                      )) : (
-                        <tr>
-                          <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-400">当前尚未形成可回放的模拟交易记录。实时桥接继续推送后，这里会展示入场、出场、P&L、回撤与失效原因。</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+          <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+            <CardContent className="space-y-4 p-4">
+              <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">事件输入与参数反馈</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {eventInputEntries.length > 0 ? eventInputEntries.map(([key, value]: any) => (
+                  <div key={key} className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{key}</div>
+                    <div className="mt-2 text-lg font-black text-white">{value.score}</div>
+                    <div className="mt-2 text-xs leading-6 text-slate-400">来源：{value.source}</div>
+                  </div>
+                )) : <div className="sm:col-span-2 rounded-2xl border border-dashed border-slate-700 bg-[#08101d] px-4 py-5 text-sm text-slate-400">当前事件输入仍以代理因子为主。后续接入更稳定多源事件后，这里会展示更完整的语境分层。</div>}
               </div>
-            </div>
-          </CardContent>
-        </Card>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {parameterEntries.map(item => (
+                  <div key={item.label} className="rounded-2xl border border-slate-800 bg-[#08101d] p-4">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{item.label}</div>
+                    <div className="mt-2 text-lg font-black text-cyan-300">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
+
+      <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
+        <CardContent className="space-y-4 p-4 xl:p-5">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <div className="flex items-center gap-2 font-semibold text-white"><TrendingUp className="h-4 w-4 text-cyan-300" />模拟 P&L 验证面板</div>
+              <div className="mt-1 text-sm text-slate-400">逐笔回放 {activeBoard.securityLabel} 的 BUY / SELL 触发，验证入场、出场、回撤、奖励分、结构化解释与失效原因。</div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-5">
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">交易笔数</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.tradeCount}</span></div>
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">持仓中</span><span className="mt-2 block text-xl font-black text-white">{activeBoard.simulationSummary.openCount}</span></div>
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">浮动收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.floatingPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.floatingPnlPct)}</span></div>
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">已实现收益</span><span className={`mt-2 block text-xl font-black ${activeBoard.simulationSummary.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(activeBoard.simulationSummary.realizedPnlPct)}</span></div>
+              <div className="rounded-2xl border border-slate-800 bg-[#08101d] px-4 py-3 text-sm text-slate-300"><span className="block font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">最大回撤</span><span className="mt-2 block text-xl font-black text-white">{formatNumber(activeBoard.simulationSummary.maxDrawdownPct)}%</span></div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-[1.25rem] border border-slate-800 bg-[#08101d]">
+            <div className="overflow-x-auto">
+              <table className="min-w-[1100px] w-full text-sm">
+                <thead className="bg-slate-950/70">
+                  <tr>
+                    {[
+                      "时间",
+                      "触发",
+                      "入场",
+                      "出场",
+                      "P&L",
+                      "回撤",
+                      "持有",
+                      "奖励",
+                      "reasoning / 状态",
+                    ].map(header => (
+                      <th key={header} className="px-4 py-3 text-left font-mono text-[11px] uppercase tracking-[0.24em] text-slate-500">{header}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.length > 0 ? trades.slice(0, 10).map((trade: any) => (
+                    <tr key={`${trade.identityKey}-${trade.signalId}`} className="border-t border-slate-800 text-slate-300">
+                      <td className="px-4 py-3 whitespace-nowrap">{trade.entryTimeLabel}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded-full px-2.5 py-1 font-mono text-xs ${trade.action === "BUY" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{trade.action}</span>
+                          <span className="text-xs text-slate-400">{trade.signalType}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.entryPrice)}</td>
+                      <td className="px-4 py-3 font-semibold text-white">{formatNumber(trade.simulatedExitPrice)}</td>
+                      <td className={`px-4 py-3 font-semibold ${trade.realizedPnlPct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(trade.realizedPnlPct)}</td>
+                      <td className="px-4 py-3">{formatNumber(trade.maxDrawdownPct)}%</td>
+                      <td className="px-4 py-3">{trade.holdingMinutes}m</td>
+                      <td className={`px-4 py-3 font-semibold ${trade.rewardScore >= 0 ? "text-cyan-300" : "text-amber-300"}`}>{trade.rewardScore}</td>
+                      <td className="px-4 py-3 text-xs leading-6 text-slate-400">
+                        <div>{trade.invalidationReason ?? trade.failureReason ?? trade.explanation}</div>
+                        {trade.reasoning?.weightContribution ? <div className="mt-2 text-[11px] text-slate-500">权重贡献：M {trade.reasoning.weightContribution.macro} / E {trade.reasoning.weightContribution.event} / P {trade.reasoning.weightContribution.priceAction} / R {trade.reasoning.weightContribution.reinforcement}</div> : null}
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-slate-400">当前尚未形成可回放的模拟交易记录。实时桥接继续推送后，这里会展示入场、出场、P&L、回撤、结构化解释与失效原因。</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </BlueprintPageShell>
   );
 }
