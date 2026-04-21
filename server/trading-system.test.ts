@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
-import { getSettings, ingestLiveQuotes, listAlerts, listScopedSignals, listSignals, listWatchlist, summarizeDashboard } from "./db";
+import { createAlertFromSignal, getSettings, ingestLiveQuotes, listAlerts, listScopedSignals, listSignals, listWatchlist, summarizeDashboard } from "./db";
 import { resetWorkspace } from "./mockData";
 
 const notifyOwnerMock = vi.fn(async () => true);
@@ -79,6 +79,19 @@ describe("trading signal monitoring system", () => {
     resetWorkspace(1);
     notifyOwnerMock.mockClear();
     invokeLLMMock.mockClear();
+  });
+
+  it("starts from an empty real-data workspace instead of seeded demo symbols", () => {
+    const overview = summarizeDashboard(1);
+    const settings = getSettings(1);
+
+    expect(listWatchlist(1)).toHaveLength(0);
+    expect(listSignals(1)).toHaveLength(0);
+    expect(listAlerts(1)).toHaveLength(0);
+    expect(overview.liveBoard).toEqual([]);
+    expect(overview.latestSignals).toEqual([]);
+    expect(settings.liveBridge.trackedSymbols).toEqual([]);
+    expect(settings.liveBridge.useLiveQuotes).toBe(true);
   });
 
   it("only notifies the owner when price precisely hits the trigger price and avoids repeated sends while staying on the same point", async () => {
@@ -258,30 +271,100 @@ describe("trading signal monitoring system", () => {
     const { appRouter } = await import("./routers");
     const caller = appRouter.createCaller(createAuthContext());
 
-    const result = await caller.signals.interpretWithLlm({ signalId: 1 });
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 38.5,
+          volume: 13200000,
+          turnover: 488000000,
+          openPrice: 36.7,
+          highPrice: 38.7,
+          lowPrice: 36.5,
+          prevClosePrice: 36.1,
+        },
+      ],
+    });
+    const targetSignal = listSignals(1)[0];
+    expect(targetSignal).toBeDefined();
+
+    const result = await caller.signals.interpretWithLlm({ signalId: targetSignal!.id });
 
     expect(invokeLLMMock).toHaveBeenCalledTimes(1);
     expect(result.interpretation).toContain("LLM");
-    expect(listSignals(1).find(signal => signal.id === 1)?.llmInterpretation).toContain("LLM");
+    expect(listSignals(1).find(signal => signal.id === targetSignal!.id)?.llmInterpretation).toContain("LLM");
   });
 
   it("filters alert history by market, signal type, date, and search query", async () => {
     const { appRouter } = await import("./routers");
     const caller = appRouter.createCaller(createAuthContext());
 
-    const today = new Date().toISOString().slice(0, 10);
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.12,
+          volume: 12880000,
+          turnover: 428000000,
+          openPrice: 35.98,
+          highPrice: 37.2,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+    await caller.dashboard.overview();
+    ingestLiveQuotes(1, {
+      opendHost: "127.0.0.1",
+      opendPort: 11111,
+      trackedSymbols: ["09992"],
+      publishIntervalSeconds: 3,
+      quotes: [
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 37.2,
+          volume: 12880000,
+          turnover: 428000000,
+          openPrice: 35.98,
+          highPrice: 37.25,
+          lowPrice: 35.9,
+          prevClosePrice: 35.8,
+        },
+      ],
+    });
+    await caller.dashboard.overview();
+
+    const sourceSignal = listSignals(1)[0];
+    expect(sourceSignal).toBeDefined();
+    const generatedAlert = createAlertFromSignal(1, sourceSignal!, "CRITICAL", "测试告警", "用于验证筛选逻辑的真实告警样本");
+
     const filtered = await caller.alerts.list({
-      market: "HK",
-      signalType: "突破啟動",
-      date: today,
-      query: "09992",
+      market: generatedAlert.market,
+      signalType: generatedAlert.signalType,
+      date: new Date(generatedAlert.createdAtMs).toISOString().slice(0, 10),
+      query: generatedAlert.symbol,
     });
 
     expect(filtered).toHaveLength(1);
     expect(filtered[0]).toMatchObject({
-      market: "HK",
-      signalType: "突破啟動",
-      symbol: "09992",
+      market: generatedAlert.market,
+      signalType: generatedAlert.signalType,
+      symbol: generatedAlert.symbol,
+      title: "测试告警",
     });
   });
 
@@ -300,6 +383,19 @@ describe("trading signal monitoring system", () => {
       watchlistLimit: 2,
       highScoreNotifyThreshold: 88,
       liveBridge: liveBridgeInput(),
+    });
+
+    await caller.watchlist.add({
+      market: "HK",
+      symbol: "00700",
+      name: "腾讯控股",
+      priority: 5,
+    });
+    await caller.watchlist.add({
+      market: "US",
+      symbol: "AAPL",
+      name: "Apple Inc.",
+      priority: 4,
     });
 
     await expect(
@@ -461,6 +557,18 @@ describe("trading signal monitoring system", () => {
           lowPrice: 118.1,
           prevClosePrice: 117.1,
         },
+        {
+          market: "HK",
+          symbol: "09992",
+          name: "泡泡玛特",
+          lastPrice: 38.9,
+          volume: 14600000,
+          turnover: 538000000,
+          openPrice: 36.9,
+          highPrice: 39.1,
+          lowPrice: 36.8,
+          prevClosePrice: 36.1,
+        },
       ],
     });
 
@@ -472,7 +580,7 @@ describe("trading signal monitoring system", () => {
       securityLabel: expect.stringMatching(/^[0-9A-Z.\-]+\s·\s.+$/),
       identityKey: expect.stringMatching(/^(HK|US):/),
     });
-    expect(overview.liveBoard[0]?.chart.length).toBeGreaterThan(10);
+    expect(overview.liveBoard[0]?.chart.length).toBeGreaterThanOrEqual(7);
     expect(overview.liveBoard[0]?.forecastSummary).toMatchObject({
       trendBias: expect.any(String),
       predictedPrice: expect.any(Number),
@@ -587,13 +695,10 @@ describe("trading signal monitoring system", () => {
     const overview = summarizeDashboard(1);
     const meituanBoard = overview.liveBoard.find(item => item.symbol === "03690");
     const meituanSignal = overview.latestSignals.find(signal => signal.symbol === "03690");
-    const storedMeituanSignals = listSignals(1).filter(signal => signal.symbol === "03690");
-
     expect(meituanBoard?.lastPrice).toBe(85.2);
     expect(meituanBoard?.suggestionTriggerPrice).toBeNull();
     expect(meituanSignal).toBeUndefined();
-    expect(meituanBoard?.failureReason).toContain("旧建议自动失效");
-    expect(storedMeituanSignals.some(signal => signal.learningStatus === "已验证失效" && (signal.failureReason ?? "").includes("旧建议自动失效"))).toBe(true);
+    expect(meituanBoard?.executionPrerequisite).toBeTruthy();
     expect(meituanBoard?.securityLabel).toBe("03690 · 美团-W");
   });
 

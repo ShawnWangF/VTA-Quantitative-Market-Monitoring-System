@@ -365,10 +365,8 @@ function resolveSignalSuppressionReason(signal: SignalRecord, latestPrice: numbe
     }
   }
 
-  if (signal.sourceMode === "demo") {
-    return settings.liveBridge.useLiveQuotes
-      ? "实时模式已开启，演示信号不再作为可执行指令展示。"
-      : "当前仍为演示行情，演示信号仅用于界面占位，不作为实盘执行建议。";
+  if (signal.sourceMode === "pending") {
+    return "当前标的尚未收到真实桥接行情，系统不会生成可执行交易指令。";
   }
 
   return null;
@@ -1173,7 +1171,7 @@ export function addWatchlistItem(
     highPrice: 0,
     lowPrice: 0,
     prevClosePrice: 0,
-    sourceMode: "demo",
+    sourceMode: "pending",
     isActive: 1,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -1449,7 +1447,7 @@ export function summarizeDashboard(userId: number) {
     const activeReasoning = activeSignal ? deriveSignalReasoning(workspace, item, activeSignal, history) : null;
     const activeParameterFeedback = activeSignal ? deriveAdaptiveParameterFeedback(workspace, item.market, item.symbol, activeSignal.signalType) : null;
     const eventInputs = activeSignal ? {
-      macro: { source: settings.liveBridge.useLiveQuotes ? "live_quote_proxy" : "demo_proxy", score: round(activeSignal.quoteChangePct * 0.45, 2) },
+      macro: { source: settings.liveBridge.useLiveQuotes ? "live_quote_proxy" : "awaiting_bridge_proxy", score: round(activeSignal.quoteChangePct * 0.45, 2) },
       news: { source: activeSignal.llmForecastGeneratedAtMs ? "llm_summary_proxy" : "price_action_proxy", score: round((activeSignal.score - 70) / 10, 2) },
       companyEvent: { source: activeSignal.signalType === "突破啟動" ? "breakout_structure_proxy" : "signal_structure_proxy", score: round((activeSignal.direction === "做空" ? -1 : 1) * 1.2, 2) },
       sentiment: { source: activeSignal.llmForecastBias ? "llm_bias_proxy" : "volume_proxy", score: round(activeSignal.direction === "做空" ? -0.8 : 0.8, 2) },
@@ -1490,8 +1488,8 @@ export function summarizeDashboard(userId: number) {
       executionPrerequisite: activeSignal?.executionPrerequisite ?? (latestInvalidatedSignal ? "旧建议已失效，等待新的价格结构与量能确认后再生成实时指令。" : "等待价格与成交量同时确认。"),
       riskLevel: activeSignal?.riskLevel ?? (latestInvalidatedSignal ? "高" : "中"),
       failureReason: activeSignal?.failureReason ?? latestInvalidatedSignal?.failureReason ?? null,
-      llmStrategyNote: activeSignal?.llmInterpretation ?? `${item.symbol} 当前以${trendBias}策略为主，系统会结合最近信号命中率与回撤表现动态修正后续评分和提醒强度。`,
-      llmForecastSummary: activeSignal?.llmForecastSummary ?? `${item.symbol} 预计短线维持${trendBias}节奏，但仍需结合触发位与止损位执行。`,
+      llmStrategyNote: activeSignal?.llmInterpretation ?? `${item.symbol} 正在等待更多真实行情样本，系统将在桥接持续推送后滚动更新执行摘要与策略偏向。`,
+      llmForecastSummary: activeSignal?.llmForecastSummary ?? `${item.symbol} 当前仅保留真实行情驱动模式；若尚未收到实时行情，预测栏会显示等待桥接中的运行状态。`,
       llmForecastBias: activeSignal?.llmForecastBias ?? trendBias,
       llmForecastGeneratedAtMs: activeSignal?.llmForecastGeneratedAtMs ?? null,
       latestMarker: {
@@ -1529,7 +1527,8 @@ export function summarizeDashboard(userId: number) {
     highScoreCount: displaySignals.filter(signal => signal.score >= settings.highScoreNotifyThreshold).length,
     liveBridge: {
       ...settings.liveBridge,
-      sourceLabel: settings.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace",
+        sourceLabel: settings.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge",
+
     },
     liveBoard,
     strategyLearning: {

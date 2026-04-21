@@ -29,7 +29,7 @@
   "bridge_token": "系统设置页中的桥接令牌",
   "opend_host": "127.0.0.1",
   "opend_port": 11111,
-  "tracked_symbols": ["03690", "09992"],
+  "tracked_symbols": ["REPLACE_WITH_REAL_SYMBOL_1", "REPLACE_WITH_REAL_SYMBOL_2"],
   "publish_interval_seconds": 3,
   "request_timeout_seconds": 10
 }
@@ -63,7 +63,7 @@ python .\windows_futu_bridge.py --config C:\futu\bridge_config.json
 
 1. 连接 `127.0.0.1:11111`
 2. 订阅港股报价
-3. 拉取 `03690` 与 `09992` 的最新价格、成交量、成交额等字段
+3. 拉取 `tracked_symbols` 中填写的真实股票价格、成交量、成交额等字段
 4. 推送到云端系统
 5. 云端仪表板、观察名單、实时信号和交易建议同步刷新
 
@@ -73,7 +73,7 @@ python .\windows_futu_bridge.py --config C:\futu\bridge_config.json
 
 - 桥接状态从 **未连接** 变成 **已连接**
 - 最近心跳时间与最近行情更新时间开始刷新
-- 观察名單中的数据源从 **DEMO** 切换为 **LIVE**
+- 观察名單中的数据状态从 **WAIT** 切换为 **LIVE**
 - 实时信号页中的价格、涨跌幅、成交量和交易建议跟随行情变化
 
 ## 常见问题
@@ -110,10 +110,10 @@ python .\windows_futu_bridge.py --config .\bridge_config.json
 说明 Windows 本机的 Futu OpenD 尚未登录，或配置里的 `opend_host` / `opend_port` 与实际监听值不一致。
 
 ### 7. 报错 `tracked_symbols 不能为空`
-请确认 `tracked_symbols` 是至少包含一个代码的数组，首轮建议直接使用：
+请确认 `tracked_symbols` 是至少包含一个真实股票代码的数组，首轮可以直接使用你当前盯盘的真实代码，例如：
 
 ```json
-["03690", "09992"]
+["AAPL", "MSFT"]
 ```
 
 ### 8. 页面显示“异常”
@@ -124,9 +124,6 @@ python .\windows_futu_bridge.py --config .\bridge_config.json
 
 ## 当前第一批港股标的
 
-当前默认接入的港股标的为：
+当前不再预设任何默认标的。
 
-- **美团（03690）**
-- **泡泡玛特（09992）**
-
-后续你可以继续把更多港股或美股代码加入 `tracked_symbols`。
+请把 `tracked_symbols` 改成你当前实际盯盘的真实股票代码；后续你也可以继续把更多港股或美股代码加入 `tracked_symbols`。

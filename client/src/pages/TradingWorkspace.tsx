@@ -71,12 +71,22 @@ function bridgeStatusTone(status: BridgeConnectionStatus) {
   return "border-slate-300 bg-slate-100 text-slate-700";
 }
 
+function sourceModeLabel(mode: "live" | "pending") {
+  return mode === "live" ? "LIVE" : "WAIT";
+}
+
+function sourceModeTone(mode: "live" | "pending") {
+  return mode === "live"
+    ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800"
+    : "border-amber-200 bg-amber-50 font-mono text-amber-800";
+}
+
 function BlueprintPageShell({
   title,
   description,
   eyebrow,
   children,
-  workspaceLabel = "Demo Feed · Mock Workspace",
+  workspaceLabel = "Real Data Required · Awaiting Bridge",
 }: {
   title: string;
   description: string;
@@ -214,7 +224,7 @@ function EmptyState({ title, description }: { title: string; description: string
 
 export function DashboardPage() {
   const { overview } = useTradingWorkspaceData();
-  const [activeSymbol, setActiveSymbol] = useState("03690");
+  const [activeSymbol, setActiveSymbol] = useState("");
 
   const liveBoard = overview.data?.liveBoard ?? [];
   const activeBoard = useMemo(() => {
@@ -251,7 +261,7 @@ export function DashboardPage() {
 
   const data = overview.data;
   if (!data || !activeBoard) {
-    return <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="暂无可用数据。"><EmptyState title="暂无数据" description="请稍后刷新，或先在观察名單中添加标的。" /></BlueprintPageShell>;
+    return <BlueprintPageShell eyebrow="Dashboard" title="仪表板主页" description="当前仅展示真实行情驱动数据。"><EmptyState title="暂无真实数据" description="请先在设置页连接桥接并添加真实标的；未收到实时行情前，页面不会回退显示演示股票或演示价格。" /></BlueprintPageShell>;
   }
 
   const trades = simulatedTrades.data ?? [];
@@ -269,6 +279,13 @@ export function DashboardPage() {
     { label: "阈值偏移%", value: activeBoard.parameterFeedback.triggerThresholdShiftPct },
     { label: "止损缓冲%", value: activeBoard.parameterFeedback.stopLossBufferPct },
   ] : [];
+  const summaryEntries = [
+    `LLM ${activeBoard.llmForecastBias ?? activeBoard.forecastSummary.trendBias} · ${activeBoard.llmForecastSummary}`,
+    `执行 ${activeBoard.suggestionAction ?? "等待触发"} · ${activeBoard.executionPrerequisite}`,
+    `预测 ${formatNumber(activeBoard.forecastSummary.predictedPrice)} · ${formatSigned(activeBoard.forecastSummary.predictedChangePct)}`,
+    `强化反馈 ${activeBoard.strategyLearning.adaptiveWeight}x · 奖励 ${activeBoard.strategyLearning.rewardScore}`,
+    `桥接 ${data.liveBridge.connectionStatus} · 最近更新 ${formatDateTime(data.liveBridge.lastQuoteAt)}`,
+  ];
 
   return (
     <BlueprintPageShell
@@ -277,6 +294,7 @@ export function DashboardPage() {
       description="横向全屏呈现主图、指令、结构化解释与模拟验证结果。页面会随窗口宽度自适应重排，并在空间不足时自动收缩左侧导航。"
       workspaceLabel={data.liveBridge.sourceLabel}
     >
+      <style>{`@keyframes terminalTicker { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }`}</style>
       <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] border border-slate-200 bg-white/82 px-4 py-3 text-sm text-slate-600 shadow-[0_18px_60px_-42px_rgba(15,23,42,0.25)]">
         <MarketPill market="HK" status={data.marketStatus.HK} />
         <div className={`rounded-full border px-4 py-2 font-mono text-xs uppercase tracking-[0.24em] ${bridgeStatusTone(data.liveBridge.connectionStatus)}`}>
@@ -303,7 +321,7 @@ export function DashboardPage() {
                 >
                   <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.24em]">
                     <span>{item.symbol}</span>
-                    <span className={item.sourceMode === "live" ? "text-emerald-300" : "text-amber-300"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</span>
+                    <span className={item.sourceMode === "live" ? "text-emerald-300" : "text-amber-300"}>{sourceModeLabel(item.sourceMode)}</span>
                   </div>
                   <div className="mt-1 text-sm font-semibold">{item.name}</div>
                   <div className={`mt-1 text-xs ${item.changePct >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{formatSigned(item.changePct)}</div>
@@ -439,6 +457,21 @@ export function DashboardPage() {
         <div className="grid content-start gap-4">
           <Card className="border-slate-800 bg-[#07111f] text-slate-100 shadow-[0_30px_120px_-42px_rgba(2,6,23,0.9)]">
             <CardContent className="space-y-4 p-4">
+              <div className="overflow-hidden rounded-2xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+                <div className="mb-2 flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.24em] text-cyan-200/80">
+                  <span>LLM Runtime Summary</span>
+                  <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono">RUNNING</span>
+                </div>
+                <div className="overflow-hidden whitespace-nowrap">
+                  <div className="flex min-w-max gap-4 pr-4 text-xs text-cyan-100/85" style={{ animation: "terminalTicker 28s linear infinite" }}>
+                    {[...summaryEntries, ...summaryEntries].map((entry, index) => (
+                      <span key={`${entry}-${index}`} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono">
+                        {entry}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
               <div>
                 <div className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">执行与解释</div>
                 <div className={`mt-3 text-3xl font-black tracking-[-0.04em] ${activeBoard.suggestionAction === "卖出提醒" ? "text-rose-300" : activeBoard.suggestionAction === "买入提醒" ? "text-emerald-300" : "text-slate-200"}`}>{activeBoard.suggestionAction ?? "观察中"}</div>
@@ -611,12 +644,12 @@ export function WatchlistPage() {
   const bridge = settings.data?.liveBridge;
 
   return (
-    <BlueprintPageShell eyebrow="Watchlist" title="观察名單管理" description="支持新增、删除港股与美股标的，设置优先级，并在同一页面持续查看实时价格、涨跌幅、成交量与数据来源。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+    <BlueprintPageShell eyebrow="Watchlist" title="观察名單管理" description="支持新增、删除港股与美股标的，设置优先级，并在同一页面持续查看真实价格、涨跌幅、成交量与数据状态。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.3fr]">
         <Card className="border-white/80 bg-white/90">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><Search className="h-5 w-5 text-cyan-700" />新增监控标的</CardTitle>
-            <CardDescription>首批建议先围绕美团与泡泡玛特构建港股实时监控池。</CardDescription>
+            <CardDescription>请只添加你当前实际盯盘的真实股票，系统不会再自动填充示例标的。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 text-sm leading-7 text-slate-700">
@@ -635,11 +668,11 @@ export function WatchlistPage() {
               </div>
               <div className="grid gap-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">标的代码</label>
-                <Input value={form.symbol} onChange={event => setForm(prev => ({ ...prev, symbol: event.target.value.toUpperCase() }))} placeholder="例如 03690 或 NVDA" />
+                <Input value={form.symbol} onChange={event => setForm(prev => ({ ...prev, symbol: event.target.value.toUpperCase() }))} placeholder="输入真实股票代码，例如 AAPL 或 00700" />
               </div>
               <div className="grid gap-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">标的名称</label>
-                <Input value={form.name} onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))} placeholder="例如 美团-W / 泡泡玛特" />
+                <Input value={form.name} onChange={event => setForm(prev => ({ ...prev, name: event.target.value }))} placeholder="输入真实股票名称，例如 Apple Inc. 或 腾讯控股" />
               </div>
               <div className="grid gap-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">优先级</label>
@@ -683,7 +716,8 @@ export function WatchlistPage() {
                   <span key={`${item.id}-price`} className="font-semibold">{formatNumber(item.lastPrice)}</span>,
                   <span key={`${item.id}-change`} className={item.changePct >= 0 ? "text-cyan-700" : "text-pink-700"}>{formatSigned(item.changePct)}</span>,
                   <span key={`${item.id}-volume`} className="font-mono text-xs text-slate-600">{formatNumber(item.volume)}</span>,
-                  <Badge key={`${item.id}-source`} variant="outline" className={item.sourceMode === "live" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "font-mono"}>{item.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>,
+                    <Badge key={`${item.id}-source`} variant="outline" className={sourceModeTone(item.sourceMode)}>{sourceModeLabel(item.sourceMode)}</Badge>,
+
                   <Button key={`${item.id}-remove`} variant="outline" size="sm" onClick={() => removeMutation.mutate({ id: item.id })}>删除</Button>,
                 ])}
               />
@@ -720,7 +754,7 @@ export function SignalsPage() {
   }, [autoRequestedIds, interpretMutation, signalItems]);
 
   return (
-      <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="实时信号页也统一采用代码 + 名称 + 行情快照的展示方式，确保提醒对象与实际标的严格一致，只在行情之上叠加必要指令。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+      <BlueprintPageShell eyebrow="Live Signals" title="实时信号面板" description="实时信号页也统一采用代码 + 名称 + 行情快照的展示方式，确保提醒对象与实际标的严格一致，只在行情之上叠加必要指令。" workspaceLabel={bridge?.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
 
       <div className="grid gap-4 md:grid-cols-2">
         {signalItems.map((signal: any) => (
@@ -731,7 +765,7 @@ export function SignalsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline" className="font-mono text-[11px]">{signal.market}</Badge>
                     <Badge variant="outline" className="border-cyan-200 bg-cyan-50 font-mono text-cyan-800">{signal.signalType}</Badge>
-                    <Badge variant="outline" className={signal.sourceMode === "live" ? "border-pink-200 bg-pink-50 font-mono text-pink-700" : "font-mono"}>{signal.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>
+                    <Badge variant="outline" className={sourceModeTone(signal.sourceMode)}>{sourceModeLabel(signal.sourceMode)}</Badge>
                   </div>
                   <CardTitle className="mt-3 text-2xl font-black tracking-[-0.03em]">{signal.securityLabel ?? `${signal.symbol} · ${signal.name ?? signal.symbol}`}</CardTitle>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-500 xl:grid-cols-4">
@@ -839,7 +873,7 @@ export function AlertHistoryPage() {
   const items = alerts.data ?? [];
 
   return (
-    <BlueprintPageShell eyebrow="Alert Archive" title="信号告警历史" description="记录所有历史告警，并支持按日期、市场、信号类型和关键词进行组合筛选与搜索。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+    <BlueprintPageShell eyebrow="Alert Archive" title="信号告警历史" description="记录所有历史告警，并支持按日期、市场、信号类型和关键词进行组合筛选与搜索。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
       <Card className="border-white/80 bg-white/90">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><ShieldAlert className="h-5 w-5 text-pink-700" />筛选与检索</CardTitle>
@@ -878,7 +912,7 @@ export function AlertHistoryPage() {
                 <AlertLevelBadge key={`${alert.id}-level`} level={alert.level} />, 
                 <div key={`${alert.id}-title`}><div className="font-semibold text-slate-900">{alert.title}</div><div className="text-xs text-slate-500">{alert.message}</div></div>,
                 <span key={`${alert.id}-notify`} className="font-mono text-xs text-slate-600">{alert.notifyTriggered ? "已通知" : "未通知"}</span>,
-                <Badge key={`${alert.id}-source`} variant="outline" className={alert.sourceMode === "live" ? "border-cyan-200 bg-cyan-50 font-mono text-cyan-800" : "font-mono"}>{alert.sourceMode === "live" ? "LIVE" : "DEMO"}</Badge>,
+                <Badge key={`${alert.id}-source`} variant="outline" className={sourceModeTone(alert.sourceMode)}>{sourceModeLabel(alert.sourceMode)}</Badge>,
               ])}
             />
           )}
@@ -892,7 +926,7 @@ export function PreMarketScanPage() {
   const { scans, settings } = useTradingWorkspaceData();
   const items = scans.data ?? [];
   return (
-    <BlueprintPageShell eyebrow="Pre-Market Scan" title="盘前扫描结果页" description="展示基于量比、成交额、盘前涨幅等条件筛选出的候选标的列表，帮助你在盘前迅速构建重点观察池。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+    <BlueprintPageShell eyebrow="Pre-Market Scan" title="盘前扫描结果页" description="展示基于量比、成交额、盘前涨幅等条件筛选出的候选标的列表，帮助你在盘前迅速构建重点观察池。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
       <Card className="border-white/80 bg-white/90">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-xl font-black tracking-[-0.03em]"><Radar className="h-5 w-5 text-cyan-700" />候选标的列表</CardTitle>
@@ -925,7 +959,7 @@ export function ReviewPage() {
   const { review, settings } = useTradingWorkspaceData();
   const data = review.data;
   return (
-    <BlueprintPageShell eyebrow="Post-Market Review" title="盘后复盘报告" description="围绕命中率、误报分析、最佳信号与最差信号进行结构化复盘，帮助你迭代规则与注意力分配方式。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+    <BlueprintPageShell eyebrow="Post-Market Review" title="盘后复盘报告" description="围绕命中率、误报分析、最佳信号与最差信号进行结构化复盘，帮助你迭代规则与注意力分配方式。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
       {!data ? (
         <EmptyState title="暂无复盘数据" description="收盘后系统会自动生成复盘摘要。" />
       ) : (
@@ -1025,7 +1059,7 @@ export function SettingsPage() {
     highScoreNotifyThreshold: "88",
     opendHost: "127.0.0.1",
     opendPort: "11111",
-    trackedSymbols: "03690,09992",
+    trackedSymbols: "",
     bridgeToken: "",
     publishIntervalSeconds: "3",
     useLiveQuotes: true,
@@ -1069,7 +1103,7 @@ export function SettingsPage() {
   };
 
   return (
-    <BlueprintPageShell eyebrow="System Settings" title="系统设置页" description="配置扫描阈值、信号灵敏度、告警等级偏好、观察名單上限、高评分自动通知阈值，以及 Windows 本地 OpenD 桥接参数。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Demo Feed · Mock Workspace"}>
+    <BlueprintPageShell eyebrow="System Settings" title="系统设置页" description="配置扫描阈值、信号灵敏度、告警等级偏好、观察名單上限、高评分自动通知阈值，以及 Windows 本地 OpenD 桥接参数。" workspaceLabel={settings.data?.liveBridge.useLiveQuotes ? "Live Futu Feed · Local OpenD Bridge" : "Real Data Required · Awaiting Bridge"}>
       <div className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
         <div className="space-y-4">
           <Card className="border-white/80 bg-white/90">
@@ -1139,7 +1173,7 @@ export function SettingsPage() {
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">追踪标的</label>
-                <Input value={form.trackedSymbols} onChange={event => setForm(prev => ({ ...prev, trackedSymbols: event.target.value }))} placeholder="03690,09992" />
+                <Input value={form.trackedSymbols} onChange={event => setForm(prev => ({ ...prev, trackedSymbols: event.target.value }))} placeholder="输入真实追踪代码，逗号分隔，例如 AAPL,MSFT 或 00700,09988" />
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">桥接令牌</label>
@@ -1153,14 +1187,8 @@ export function SettingsPage() {
                 <Input value={form.publishIntervalSeconds} onChange={event => setForm(prev => ({ ...prev, publishIntervalSeconds: event.target.value }))} />
               </div>
               <div className="grid gap-2">
-                <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">实时模式</label>
-                <Select value={form.useLiveQuotes ? "live" : "demo"} onValueChange={value => setForm(prev => ({ ...prev, useLiveQuotes: value === "live" }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="live">启用实时行情</SelectItem>
-                    <SelectItem value="demo">仅使用演示数据</SelectItem>
-                  </SelectContent>
-                </Select>
+                <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">数据模式</label>
+                <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 px-4 py-3 text-sm text-cyan-950">系统已锁定为仅展示真实数据；桥接未连接时会显示空状态，而不会回退演示行情。</div>
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <label className="font-mono text-xs uppercase tracking-[0.22em] text-slate-500">云端接收地址</label>
@@ -1270,7 +1298,7 @@ export function SettingsPage() {
                 <ol className="mt-3 space-y-2 pl-5 list-decimal">
                   <li>保持 Futu OpenD 已登录，地址为 {form.opendHost}，端口为 {form.opendPort}。</li>
                   <li>在本地桥接程序配置中填入当前页面展示的云端接收地址和桥接令牌，配置键名需使用 `cloud_ingest_url`、`bridge_token`、`opend_host`、`opend_port`、`tracked_symbols`、`publish_interval_seconds`。</li>
-                  <li>追踪标的默认填入 {trackedSymbolList.join("、")}，`tracked_symbols` 必须是非空数组，例如 `["03690","09992"]`，否则会报 `tracked_symbols 不能为空`。</li>
+                  <li>`tracked_symbols` 必须填写为你的真实追踪代码数组，例如 `["AAPL","MSFT"]` 或 `["00700","09988"]`；留空会报 `tracked_symbols 不能为空`。</li>
                   <li>启动时必须使用 `python .\\windows_futu_bridge.py --config .\\bridge_config.json`；在 PowerShell 中也必须保留 `--config` 与配置文件路径的显式写法。</li>
                   <li>当桥接状态变为“已连接”时，仪表板、观察名單和实时信号页会自动刷新为实时行情驱动。</li>
                 </ol>
@@ -1296,7 +1324,7 @@ export function SettingsPage() {
   "bridge_token": "${form.bridgeToken}",
   "opend_host": "${form.opendHost}",
   "opend_port": ${form.opendPort},
-  "tracked_symbols": ["03690", "09992"],
+  "tracked_symbols": [${trackedSymbolList.map(symbol => `"${symbol}"`).join(", ")}],
   "publish_interval_seconds": ${form.publishIntervalSeconds}
 }`}</pre>
               </div>
@@ -1307,7 +1335,7 @@ export function SettingsPage() {
                   <p>如果提示“配置文件不存在”，请确认 `bridge_config.json` 的真实路径与 PowerShell 当前目录一致，必要时改用绝对路径。</p>
                   <p>如果日志提示“云端地址未填写”，请检查 `cloud_ingest_url` 是否完整复制自当前页面的接收地址。</p>
                   <p>如果显示“OpenD 未连接”，说明 Windows 本机的 Futu OpenD 尚未登录或地址 / 端口与这里填写的不一致。</p>
-                  <p>如果出现 `tracked_symbols 不能为空`，请把 `tracked_symbols` 写成至少包含一个代码的数组，推荐直接使用 `["03690", "09992"]` 进行首轮验证。</p>
+                  <p>如果出现 `tracked_symbols 不能为空`，请把 `tracked_symbols` 写成至少包含一个真实股票代码的数组，并与本页“追踪标的”保持一致。</p>
                 </div>
               </div>
 
